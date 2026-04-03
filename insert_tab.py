@@ -24,11 +24,12 @@ def _show_success(file_number):
 
 
 def _show_timed_success(file_number, elapsed_seconds, elapsed_before_save=None, elapsed_after_save=None):
-    msg = f"Row saved with File Number: {file_number}\nElapsed: {elapsed_seconds:.3f}s"
-    if elapsed_before_save is not None and elapsed_after_save is not None:
-        save_duration = elapsed_after_save - elapsed_before_save
-        refresh_duration = elapsed_seconds - elapsed_after_save
-        msg += f"\n(Save: {save_duration:.3f}s, Refresh: {refresh_duration:.3f}s)"
+    msg = f"Row saved with File Number: {file_number}"
+    # optionally include save vs refresh breakdown for debugging performance issues
+    # if elapsed_before_save is not None and elapsed_after_save is not None:
+    #     save_duration = elapsed_after_save - elapsed_before_save
+    #     refresh_duration = elapsed_seconds - elapsed_after_save
+    #     msg += f"\n(Save: {save_duration:.3f}s, Refresh: {refresh_duration:.3f}s)"
     messagebox.showinfo("Saved", msg)
 
 
