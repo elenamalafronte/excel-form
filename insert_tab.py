@@ -218,9 +218,11 @@ def build_insert_tab(tab):
             widget = CTkTextbox(
                 container,
                 width=ENTRY_WIDTH,
-                height=TEXTBOX_HEIGHT,
+                height=TEXTBOX_HEIGHT + 10,  # add a bit of extra height so its visually clear this is a multi-line field
                 corner_radius=CONTROL_CORNER_RADIUS,
                 font=body_font,
+                border_width=2,
+                border_color="#979DA2",
             )
             widget.configure(state="disabled")
             widget.grid(row=row_idx, column=1, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
