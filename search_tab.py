@@ -78,6 +78,9 @@ def build_search_tab(tab):
     CTkButton(container, text="Search", command=on_search).grid(
         row=0, column=4, sticky="ew", padx=8, pady=6
     )
+    CTkButton(container, text="Refresh", command=on_search).grid(
+        row=2, column=0, sticky="w", padx=8, pady=6
+    )
     CTkButton(container, text="Open Workbook", command=open_workbook).grid(
         row=2, column=4, sticky="ew", padx=8, pady=6
     )
