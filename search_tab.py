@@ -1,7 +1,7 @@
 import os
 from tkinter import messagebox, ttk
 
-from customtkinter import CTkButton, CTkComboBox, CTkEntry, CTkFont, CTkFrame, CTkLabel
+from customtkinter import CTkButton, CTkComboBox, CTkEntry, CTkFont, CTkFrame, CTkLabel, CTkScrollbar
 
 from config import COLUMNS, EXCEL_FILE, SEARCH_BY
 from excel import search_rows
@@ -76,9 +76,13 @@ def build_search_tab(tab):
 
     results_tree.grid(row=2, column=0, columnspan=5, sticky="nsew", padx=ROW_PADX, pady=8)
 
-    y_scroll = ttk.Scrollbar(container, orient="vertical", command=results_tree.yview)
+    y_scroll = CTkScrollbar(container, orientation="vertical", command=results_tree.yview)
     y_scroll.grid(row=2, column=5, sticky="ns", pady=8)
     results_tree.configure(yscrollcommand=y_scroll.set)
+
+    x_scroll = CTkScrollbar(container, orientation="horizontal", command=results_tree.xview)
+    x_scroll.grid(row=3, column=0, columnspan=5, sticky="ew", padx=ROW_PADX, pady=(0, 8))
+    results_tree.configure(xscrollcommand=x_scroll.set)
 
     refresh_button = None
 
@@ -157,7 +161,7 @@ def build_search_tab(tab):
         font=body_font,
     )
     refresh_button.grid(
-        row=3, column=0, sticky="w", padx=ROW_PADX, pady=10
+        row=4, column=0, sticky="w", padx=ROW_PADX, pady=10
     )
     CTkButton(
         container,
@@ -167,7 +171,7 @@ def build_search_tab(tab):
         corner_radius=BUTTON_CORNER_RADIUS,
         font=body_font,
     ).grid(
-        row=3, column=4, sticky="ew", padx=ROW_PADX, pady=10
+        row=4, column=4, sticky="ew", padx=ROW_PADX, pady=10
     )
 
     container.grid_columnconfigure(1, weight=1)
