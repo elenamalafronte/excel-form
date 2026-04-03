@@ -3,10 +3,27 @@ import threading
 from tkinter import filedialog, messagebox
 from pathlib import Path
 
-from customtkinter import CTkButton, CTkEntry, CTkFrame, CTkLabel, CTkTextbox, CTkScrollableFrame
+from customtkinter import CTkButton, CTkEntry, CTkFont, CTkFrame, CTkLabel, CTkTextbox, CTkScrollableFrame
 
 from config import COLUMNS, EXCEL_FILE, get_next_fileNumber, get_next_fileNumber_from_value
 from excel import append_row, load_sheet
+from ui_style import (
+    BODY_FONT_SIZE,
+    BUTTON_CORNER_RADIUS,
+    BUTTON_HEIGHT,
+    CARD_CORNER_RADIUS,
+    CONTROL_CORNER_RADIUS,
+    ENTRY_HEIGHT,
+    ENTRY_WIDTH,
+    FORM_HEIGHT,
+    FORM_WIDTH,
+    LABEL_COLUMN_MIN_WIDTH,
+    LABEL_FONT_SIZE,
+    ROW_PADX,
+    ROW_PADY,
+    SECTION_TITLE_SIZE,
+    TEXTBOX_HEIGHT,
+)
 
 # TODO: make tab buttons for insert and search tab wider
 # TODO: numbers in table in search tab need to be centered in their cell (now are left aligned)
@@ -134,12 +151,22 @@ def _bind_itemcode_autofill(item_code_widget, description_widget):
 
 
 def build_insert_tab(tab):
-    outer_container = CTkFrame(tab)
-    outer_container.pack(fill="both", expand=True)
+    label_font = CTkFont(size=LABEL_FONT_SIZE)
+    body_font = CTkFont(size=BODY_FONT_SIZE)
+    title_font = CTkFont(size=SECTION_TITLE_SIZE, weight="bold")
 
-    # Create an inner container with fixed width for narrower fields, centered
-    container = CTkScrollableFrame(outer_container, width=670, height=800)
-    container.pack(pady=12)
+    outer_container = CTkFrame(tab, fg_color="transparent")
+    outer_container.pack(fill="both", expand=True, padx=12, pady=12)
+
+    # Centered, scrollable card to keep the insert form tidy and readable.
+    container = CTkScrollableFrame(
+        outer_container,
+        width=FORM_WIDTH,
+        height=FORM_HEIGHT,
+        corner_radius=CARD_CORNER_RADIUS,
+    )
+    container.pack(pady=8)
+    container.grid_columnconfigure(0, minsize=LABEL_COLUMN_MIN_WIDTH)
 
     next_file_number_state = {"value": None}
 
@@ -152,36 +179,91 @@ def build_insert_tab(tab):
     item_code_widget = None
     description_widget = None
     for row_idx, col in enumerate(COLUMNS):
-        CTkLabel(container, text=col["name"]).grid(row=row_idx, column=0, sticky="w", padx=8, pady=6)
+        filelink_header = None
+        if col.get("type") == "filelink":
+            filelink_header = CTkFrame(container, fg_color="transparent")
+            filelink_header.grid(
+                row=row_idx,
+                column=0,
+                sticky="ew",
+                padx=ROW_PADX,
+                pady=ROW_PADY,
+            )
+            filelink_header.grid_columnconfigure(0, weight=1)
+            CTkLabel(filelink_header, text=col["name"], font=label_font).grid(
+                row=0,
+                column=0,
+                sticky="w",
+            )
+        else:
+            CTkLabel(container, text=col["name"], font=label_font).grid(
+                row=row_idx,
+                column=0,
+                sticky="w",
+                padx=ROW_PADX,
+                pady=ROW_PADY,
+            )
 
         if col["name"] == "File Number":
-            widget = CTkEntry(container, width=300)
+            widget = CTkEntry(
+                container,
+                width=ENTRY_WIDTH,
+                height=ENTRY_HEIGHT,
+                corner_radius=CONTROL_CORNER_RADIUS,
+                font=body_font,
+            )
             widget.insert(0, "Auto-generated on Save")
             widget.configure(state="disabled")
-            widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
+            widget.grid(row=row_idx, column=1, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
         elif col["name"] == "Description":
-            widget = CTkTextbox(container, width=300, height=50)
-            widget.insert("1.0", "Auto-filled from ItemCode")
+            widget = CTkTextbox(
+                container,
+                width=ENTRY_WIDTH,
+                height=TEXTBOX_HEIGHT,
+                corner_radius=CONTROL_CORNER_RADIUS,
+                font=body_font,
+            )
             widget.configure(state="disabled")
-            widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
+            widget.grid(row=row_idx, column=1, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
             description_widget = widget
         elif col["name"] == "ItemCode":
-            widget = CTkEntry(container, width=300)
-            widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
+            widget = CTkEntry(
+                container,
+                width=ENTRY_WIDTH,
+                height=ENTRY_HEIGHT,
+                corner_radius=CONTROL_CORNER_RADIUS,
+                font=body_font,
+            )
+            widget.grid(row=row_idx, column=1, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
             fields["ItemCode"] = widget
             item_code_widget = widget
         elif col.get("type") == "filelink":
-            widget = CTkEntry(container, width=300)
-            widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
-            CTkButton(
+            widget = CTkEntry(
                 container,
+                width=ENTRY_WIDTH,
+                height=ENTRY_HEIGHT,
+                corner_radius=CONTROL_CORNER_RADIUS,
+                font=body_font,
+            )
+            CTkButton(
+                filelink_header,
                 text="Browse",
-                width=90,
+                width=100,
+                height=BUTTON_HEIGHT,
+                corner_radius=BUTTON_CORNER_RADIUS,
+                font=body_font,
                 command=lambda w=widget: _open_file_picker(w),
-            ).grid(row=row_idx, column=2, sticky="w", padx=8, pady=6)
+            ).grid(row=0, column=1, sticky="e")
+            widget.grid(row=row_idx, column=1, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
         else:
-            widget = CTkEntry(container, width=300)
-            widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
+            widget = CTkEntry(
+                container,
+                width=ENTRY_WIDTH,
+                height=ENTRY_HEIGHT,
+                corner_radius=CONTROL_CORNER_RADIUS,
+                font=body_font,
+            )
+            widget.grid(row=row_idx, column=1, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
 
         fields[col["name"]] = widget
 
@@ -189,7 +271,13 @@ def build_insert_tab(tab):
         _bind_itemcode_autofill(item_code_widget, description_widget)
 
     # keep a reference so the thread callback can re-enable it
-    save_button = CTkButton(container, text="Save Row")
+    save_button = CTkButton(
+        container,
+        text="Save Row",
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+    )
 
     def on_submit():
         started_at = time.perf_counter()
@@ -261,6 +349,6 @@ def build_insert_tab(tab):
         column=0,
         columnspan=3,
         sticky="ew",
-        padx=8,
-        pady=14,
+        padx=ROW_PADX,
+        pady=(12, 16),
     )

@@ -1,35 +1,85 @@
 import os
 from tkinter import messagebox, ttk
 
-from customtkinter import CTkButton, CTkComboBox, CTkEntry, CTkFrame, CTkLabel
+from customtkinter import CTkButton, CTkComboBox, CTkEntry, CTkFont, CTkFrame, CTkLabel
 
 from config import COLUMNS, EXCEL_FILE, SEARCH_BY
 from excel import search_rows
+from ui_style import (
+    BODY_FONT_SIZE,
+    BUTTON_CORNER_RADIUS,
+    BUTTON_HEIGHT,
+    CARD_CORNER_RADIUS,
+    CONTROL_CORNER_RADIUS,
+    ENTRY_HEIGHT,
+    LABEL_FONT_SIZE,
+    ROW_PADX,
+    ROW_PADY,
+    SECTION_TITLE_SIZE,
+    TABLE_FONT_SIZE,
+    TABLE_HEADING_FONT_SIZE,
+    TABLE_ROW_HEIGHT,
+)
 
 
 def build_search_tab(tab):
-    container = CTkFrame(tab)
-    container.pack(fill="both", expand=True, padx=12, pady=12)
+    label_font = CTkFont(size=LABEL_FONT_SIZE)
+    body_font = CTkFont(size=BODY_FONT_SIZE)
+    title_font = CTkFont(size=SECTION_TITLE_SIZE, weight="bold")
 
-    CTkLabel(container, text="Search Value").grid(row=0, column=0, sticky="w", padx=8, pady=6)
-    search_entry = CTkEntry(container)
-    search_entry.grid(row=0, column=1, sticky="ew", padx=8, pady=6)
+    outer_container = CTkFrame(tab, fg_color="transparent")
+    outer_container.pack(fill="both", expand=True, padx=12, pady=12)
 
-    CTkLabel(container, text="Search By").grid(row=0, column=2, sticky="w", padx=8, pady=6)
-    search_by = CTkComboBox(container, values=SEARCH_BY)
+    container = CTkFrame(outer_container, corner_radius=CARD_CORNER_RADIUS)
+    container.pack(fill="both", expand=True)
+
+    CTkLabel(container, text="Search Value", font=label_font).grid(
+        row=1, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY
+    )
+    search_entry = CTkEntry(
+        container,
+        height=ENTRY_HEIGHT,
+        corner_radius=CONTROL_CORNER_RADIUS,
+        font=body_font,
+    )
+    search_entry.grid(row=1, column=1, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
+
+    CTkLabel(container, text="Search By", font=label_font).grid(
+        row=1, column=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY
+    )
+    search_by = CTkComboBox(
+        container,
+        values=SEARCH_BY,
+        height=ENTRY_HEIGHT,
+        corner_radius=CONTROL_CORNER_RADIUS,
+        font=body_font,
+    )
     search_by.set("ItemCode" if "ItemCode" in SEARCH_BY else SEARCH_BY[0])
-    search_by.grid(row=0, column=3, sticky="ew", padx=8, pady=6)
+    search_by.grid(row=1, column=3, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
+
+    table_style = ttk.Style()
+    table_style.configure(
+        "App.Treeview",
+        font=("Segoe UI", TABLE_FONT_SIZE),
+        rowheight=TABLE_ROW_HEIGHT,
+    )
+    table_style.configure(
+        "App.Treeview.Heading",
+        font=("Segoe UI", TABLE_HEADING_FONT_SIZE, "bold"),
+    )
 
     columns = [c["name"] for c in COLUMNS]
-    results_tree = ttk.Treeview(container, columns=columns, show="headings")
+    results_tree = ttk.Treeview(container, columns=columns, show="headings", style="App.Treeview")
+    centered_columns = {"File Number", "Qty_EA", "Qty_mt", "Rev", "PAGENr"}
     for col_name in columns:
         results_tree.heading(col_name, text=col_name)
-        results_tree.column(col_name, width=130, stretch=True)
+        anchor = "center" if col_name in centered_columns else "w"
+        results_tree.column(col_name, width=138, stretch=True, anchor=anchor)
 
-    results_tree.grid(row=1, column=0, columnspan=5, sticky="nsew", padx=8, pady=8)
+    results_tree.grid(row=2, column=0, columnspan=5, sticky="nsew", padx=ROW_PADX, pady=8)
 
     y_scroll = ttk.Scrollbar(container, orient="vertical", command=results_tree.yview)
-    y_scroll.grid(row=1, column=5, sticky="ns", pady=8)
+    y_scroll.grid(row=2, column=5, sticky="ns", pady=8)
     results_tree.configure(yscrollcommand=y_scroll.set)
 
     refresh_button = None
@@ -90,17 +140,38 @@ def build_search_tab(tab):
 
     on_search()
 
-    CTkButton(container, text="Search", command=on_search).grid(
-        row=0, column=4, sticky="ew", padx=8, pady=6
+    CTkButton(
+        container,
+        text="Search",
+        command=on_search,
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+    ).grid(
+        row=1, column=4, sticky="ew", padx=ROW_PADX, pady=ROW_PADY
     )
-    refresh_button = CTkButton(container, text="Refresh", command=refresh_with_feedback)
+    refresh_button = CTkButton(
+        container,
+        text="Refresh",
+        command=refresh_with_feedback,
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+    )
     refresh_button.grid(
-        row=2, column=0, sticky="w", padx=8, pady=6
+        row=3, column=0, sticky="w", padx=ROW_PADX, pady=10
     )
-    CTkButton(container, text="Open Workbook", command=open_workbook).grid(
-        row=2, column=4, sticky="ew", padx=8, pady=6
+    CTkButton(
+        container,
+        text="Open Workbook",
+        command=open_workbook,
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+    ).grid(
+        row=3, column=4, sticky="ew", padx=ROW_PADX, pady=10
     )
 
     container.grid_columnconfigure(1, weight=1)
     container.grid_columnconfigure(3, weight=1)
-    container.grid_rowconfigure(1, weight=1)
+    container.grid_rowconfigure(2, weight=1)
