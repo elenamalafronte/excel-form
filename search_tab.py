@@ -32,12 +32,27 @@ def build_search_tab(tab):
     y_scroll.grid(row=1, column=5, sticky="ns", pady=8)
     results_tree.configure(yscrollcommand=y_scroll.set)
 
+    refresh_button = None
+
     def on_search():
         rows = search_rows(search_entry.get().strip(), search_by.get())
         results_tree.delete(*results_tree.get_children())
         for row in rows:
             values = [("" if row.get(c["name"]) is None else row.get(c["name"])) for c in COLUMNS]
             results_tree.insert("", "end", values=values)
+
+    def refresh_with_feedback():
+        if refresh_button is None:
+            on_search()
+            return
+
+        original_text = refresh_button.cget("text")
+        refresh_button.configure(state="disabled", text="Refreshing...")
+        container.update_idletasks()
+        try:
+            on_search()
+        finally:
+            refresh_button.configure(state="normal", text=original_text)
 
     tab.refresh_search = on_search
     tab.auto_refresh_search = lambda: on_search()
@@ -78,7 +93,8 @@ def build_search_tab(tab):
     CTkButton(container, text="Search", command=on_search).grid(
         row=0, column=4, sticky="ew", padx=8, pady=6
     )
-    CTkButton(container, text="Refresh", command=on_search).grid(
+    refresh_button = CTkButton(container, text="Refresh", command=refresh_with_feedback)
+    refresh_button.grid(
         row=2, column=0, sticky="w", padx=8, pady=6
     )
     CTkButton(container, text="Open Workbook", command=open_workbook).grid(
