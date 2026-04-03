@@ -25,11 +25,8 @@ from ui_style import (
     TEXTBOX_HEIGHT,
 )
 
-# TODO: numbers in table in search tab need to be centered in their cell (now are left aligned)
 # TODO: make font in table in search tab bigger (now too small)
 # TODO: add dragger/something where you yourself can customise the width of the fields
-# TODO: make tab open to optimum size (now its too short so cant see the save button unless you fullscreen it)
-#   make default size big enough to show all fields + save button, but allow user to resize and have that size be remembered next time they open the app
 # TODO: add button where you click and it shows a panel where you can customise the number of fiels + their properties(required, text/number/general format etc) 
 #   then save that config chnage into the COLUMNS variable in config.py
 
