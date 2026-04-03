@@ -36,7 +36,7 @@ def build_search_tab(tab):
         rows = search_rows(search_entry.get().strip(), search_by.get())
         results_tree.delete(*results_tree.get_children())
         for row in rows:
-            values = [row.get(c["name"], "") for c in COLUMNS]
+            values = [("" if row.get(c["name"]) is None else row.get(c["name"])) for c in COLUMNS]
             results_tree.insert("", "end", values=values)
 
     tab.refresh_search = on_search
