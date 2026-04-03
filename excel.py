@@ -66,6 +66,102 @@ def _ensure_workbook_and_sheets():
     return wb, ws_source, ws_form
 
 
+def _col_idx_to_letter(col_idx):
+    """Convert 0-based column index to Excel column letter (A, B, ..., AA, ...)."""
+    letters = []
+    n = col_idx + 1
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        letters.append(chr(65 + rem))
+    return "".join(reversed(letters))
+
+
+def _find_sheet_zip_path(file_path, sheet_name):
+    """Return the ZIP-internal path to a named worksheet's XML file."""
+    with zipfile.ZipFile(file_path, "r") as z:
+        wb_xml = z.read("xl/workbook.xml").decode("utf-8")
+        rels_xml = z.read("xl/_rels/workbook.xml.rels").decode("utf-8")
+
+    id_match = re.search(
+        rf'<sheet\b[^>]*\bname="{re.escape(sheet_name)}"[^>]*\br:id="([^"]+)"', wb_xml
+    ) or re.search(
+        rf'<sheet\b[^>]*\br:id="([^"]+)"[^>]*\bname="{re.escape(sheet_name)}"', wb_xml
+    )
+    if not id_match:
+        raise ValueError(f"Sheet '{sheet_name}' not found in workbook.xml")
+    r_id = id_match.group(1)
+
+    target_match = re.search(
+        rf'<Relationship\b[^>]*\bId="{re.escape(r_id)}"[^>]*\bTarget="([^"]+)"', rels_xml
+    ) or re.search(
+        rf'<Relationship\b[^>]*\bTarget="([^"]+)"[^>]*\bId="{re.escape(r_id)}"', rels_xml
+    )
+    if not target_match:
+        raise ValueError(f"Could not resolve relationship {r_id}")
+    target = target_match.group(1)
+    return f"xl/{target}" if not target.startswith("/") else target
+
+
+def _build_row_xml(row_idx, row_values):
+    """Return the XML string for one worksheet row, using inline strings."""
+    cells = []
+    for col_idx, value in enumerate(row_values):
+        if value is None or value == "":
+            continue
+        col_letter = _col_idx_to_letter(col_idx)
+        cell_ref = f"{col_letter}{row_idx}"
+        val = str(value)
+        if val.startswith("="):
+            formula = val[1:].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            cells.append(f'<c r="{cell_ref}"><f>{formula}</f></c>')
+        else:
+            try:
+                num = float(val)
+                stored = int(num) if num == int(num) and "." not in val else num
+                cells.append(f'<c r="{cell_ref}"><v>{stored}</v></c>')
+            except ValueError:
+                safe = val.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                cells.append(f'<c r="{cell_ref}" t="inlineStr"><is><t>{safe}</t></is></c>')
+    return f'<row r="{row_idx}">{"".join(cells)}</row>'
+
+
+def _zip_append_row(file_path, row_values, new_row_idx):
+    """Append one row by rewriting only the Heat Number worksheet XML in the ZIP.
+
+    CREXPD01's bytes are copied verbatim — it is never parsed or serialized.
+    This eliminates the save latency that came from openpyxl re-serializing
+    15 000+ rows of source data on every insert.
+    """
+    sheet_zip_path = _find_sheet_zip_path(file_path, "Heat Number")
+    new_row_xml = _build_row_xml(new_row_idx, row_values)
+
+    with zipfile.ZipFile(file_path, "r") as z:
+        sheet_str = z.read(sheet_zip_path).decode("utf-8")
+
+    if "</sheetData>" not in sheet_str:
+        raise ValueError(f"</sheetData> not found in {sheet_zip_path}")
+
+    sheet_str = sheet_str.replace("</sheetData>", f"{new_row_xml}</sheetData>", 1)
+    sheet_str = re.sub(
+        r'(<dimension ref="[A-Z]+\d+:)([A-Z]+)(\d+)(")',
+        lambda m: f"{m.group(1)}{m.group(2)}{new_row_idx}{m.group(4)}",
+        sheet_str,
+    )
+
+    tmp_path = file_path.with_suffix(".xlsx.tmp")
+    try:
+        with zipfile.ZipFile(file_path, "r") as z_in, \
+             zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as z_out:
+            for item in z_in.infolist():
+                data = sheet_str.encode("utf-8") if item.filename == sheet_zip_path \
+                    else z_in.read(item.filename)
+                z_out.writestr(item, data)
+        tmp_path.replace(file_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 # Column O (1-based = 15, 0-based = 14) is the ItemCode column in CREXPD01,
 # as confirmed by the formula: MATCH(B{row}, CREXPD01!$O$1:$O$15000, 0)
 _CREXPD01_ITEMCODE_COL_FALLBACK = 14  # 0-based index
