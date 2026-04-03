@@ -300,8 +300,8 @@ def append_row(data: dict):
     except Exception:
         pass
 
-    # Phase 2 – write-mode pass (no scanning, write at exact row)
-    wb, _ws_source, ws = _ensure_workbook_and_sheets()
+    # Phase 2 – ZIP surgery: rewrite only the Heat Number sheet XML
+    new_row_idx = last_data_row + 1
 
     row_values = [data.get(col["name"], "") for col in COLUMNS]
 
@@ -312,39 +312,18 @@ def append_row(data: dict):
         (i for i, c in enumerate(COLUMNS) if c["name"] == "ItemCode"), None
     )
 
-    # Write an Excel formula so Description auto-populates when the file is opened.
-    # load_sheet() back-fills from the Python index for rows whose cache is stale.
     if desc_col_idx is not None and item_code_col_idx is not None:
         col_letter = chr(ord("A") + item_code_col_idx)
         row_values[desc_col_idx] = build_description_formula(
             f"{col_letter}{new_row_idx}", "CREXPD01"
         )
 
-    new_row_idx = last_data_row + 1
-    for col_idx, value in enumerate(row_values, start=1):
-        ws.cell(row=new_row_idx, column=col_idx, value=value)
-
-    for col_idx, col in enumerate(COLUMNS, start=1):
-        if col["name"] != "FileLink":
-            continue
-        link_value = data.get("FileLink", "")
-        if link_value:
-            cell = ws.cell(row=new_row_idx, column=col_idx)
-            cell.value = link_value
-            cell.hyperlink = str(link_value)
-            cell.style = "Hyperlink"
-
     try:
-        wb.save(str(file_path))
+        _zip_append_row(file_path, row_values, new_row_idx)
     except PermissionError as exc:
         raise PermissionError(
             f"Cannot save workbook. Close '{EXCEL_FILE}' in Excel and try again."
         ) from exc
-    finally:
-        try:
-            wb.close()
-        except Exception:
-            pass
 
 
 def search_rows(search_value, search_column="ItemCode"):
