@@ -6,7 +6,7 @@ from search_tab import build_search_tab
 
 def build_app():
 	set_appearance_mode("System")
-	set_default_color_theme("blue")
+	set_default_color_theme("green")
 
 	app = CTk()
 	app.title("Excel Form")
