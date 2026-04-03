@@ -9,6 +9,7 @@ from config import (
     EXCEL_FILE,
     FILE_NUMBER_PATTERN,
     SEARCH_BY,
+    build_description_formula,
 )
 
 
@@ -208,12 +209,20 @@ def append_row(data: dict):
 
     row_values = [data.get(col["name"], "") for col in COLUMNS]
 
-    item_code = str(data.get("ItemCode", "") or "").strip().upper()
     desc_col_idx = next(
         (i for i, c in enumerate(COLUMNS) if c["name"] == "Description"), None
     )
-    if desc_col_idx is not None:
-        row_values[desc_col_idx] = desc_index.get(item_code, "")
+    item_code_col_idx = next(
+        (i for i, c in enumerate(COLUMNS) if c["name"] == "ItemCode"), None
+    )
+
+    # Write an Excel formula so Description auto-populates when the file is opened.
+    # load_sheet() back-fills from the Python index for rows whose cache is stale.
+    if desc_col_idx is not None and item_code_col_idx is not None:
+        col_letter = chr(ord("A") + item_code_col_idx)
+        row_values[desc_col_idx] = build_description_formula(
+            f"{col_letter}{new_row_idx}", "CREXPD01"
+        )
 
     new_row_idx = last_data_row + 1
     for col_idx, value in enumerate(row_values, start=1):
