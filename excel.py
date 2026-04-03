@@ -272,25 +272,20 @@ def load_sheet():
 
 
 def append_row(data: dict):
-    """Append one row to the Heat Number sheet and save.
+    """Append one row to the Heat Number sheet via direct ZIP surgery.
 
-    Strategy to avoid the inflated-max_row bug:
-      Phase 1 — read-only streaming pass to build the description index and
-                 find the true last data row (Excel's stored max_row metadata
-                 is inflated by formatting and cannot be trusted for ws.append).
-      Phase 2 — write-mode: write directly to last_data_row + 1 with no
-                 backward scan, then save.
+    Phase 1 — read-only streaming pass to find the true last data row.
+    Phase 2 — rewrite only the Heat Number worksheet XML inside the ZIP,
+               leaving CREXPD01 untouched (never parsed, never serialized).
     """
     file_path = Path(EXCEL_FILE)
     if not file_path.exists():
         raise FileNotFoundError(f"Workbook not found: {EXCEL_FILE}")
 
-    # Phase 1 – fast read-only pass
-    desc_index = {}
+    # Phase 1 – find true last data row (openpyxl's max_row metadata is unreliable)
     last_data_row = 1
     try:
         wb_ro = load_workbook(file_path, read_only=True, data_only=True)
-        desc_index = _build_description_index(wb_ro)
         ws_ro = _get_form_sheet_for_read(wb_ro)
         if ws_ro is not None:
             for row in ws_ro.iter_rows(min_row=2):
