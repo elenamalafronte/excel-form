@@ -1,36 +1,241 @@
 import os
-from tkinter import messagebox, ttk
+from tkinter import BooleanVar, Menu, messagebox, ttk
 
-from customtkinter import CTkButton, CTkComboBox, CTkEntry, CTkFrame, CTkLabel
+from customtkinter import (
+    CTkButton,
+    CTkCheckBox,
+    CTkComboBox,
+    CTkEntry,
+    CTkFont,
+    CTkFrame,
+    CTkLabel,
+    CTkScrollbar,
+    CTkScrollableFrame,
+    CTkToplevel,
+)
 
 from config import COLUMNS, EXCEL_FILE, SEARCH_BY
 from excel import search_rows
+from ui_style import (
+    BODY_FONT_SIZE,
+    BUTTON_CORNER_RADIUS,
+    BUTTON_HEIGHT,
+    CARD_CORNER_RADIUS,
+    CONTROL_CORNER_RADIUS,
+    ENTRY_HEIGHT,
+    LABEL_FONT_SIZE,
+    ROW_PADX,
+    ROW_PADY,
+    SECTION_TITLE_SIZE,
+    TABLE_FONT_SIZE,
+    TABLE_HEADING_FONT_SIZE,
+    TABLE_ROW_HEIGHT,
+)
 
 
 def build_search_tab(tab):
-    container = CTkFrame(tab)
-    container.pack(fill="both", expand=True, padx=12, pady=12)
+    label_font = CTkFont(size=LABEL_FONT_SIZE)
+    body_font = CTkFont(size=BODY_FONT_SIZE)
+    title_font = CTkFont(size=SECTION_TITLE_SIZE, weight="bold")
 
-    CTkLabel(container, text="Search Value").grid(row=0, column=0, sticky="w", padx=8, pady=6)
-    search_entry = CTkEntry(container)
-    search_entry.grid(row=0, column=1, sticky="ew", padx=8, pady=6)
+    outer_container = CTkFrame(tab, fg_color="transparent")
+    outer_container.pack(fill="both", expand=True, padx=12, pady=12)
 
-    CTkLabel(container, text="Search By").grid(row=0, column=2, sticky="w", padx=8, pady=6)
-    search_by = CTkComboBox(container, values=SEARCH_BY)
+    container = CTkFrame(outer_container, corner_radius=CARD_CORNER_RADIUS)
+    container.pack(fill="both", expand=True)
+
+    toolbar = CTkFrame(container, fg_color="transparent")
+    toolbar.grid(row=0, column=0, columnspan=5, sticky="e", padx=ROW_PADX, pady=(8, 0))
+
+    CTkLabel(container, text="Search Value", font=label_font).grid(
+        row=1, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY
+    )
+    search_entry = CTkEntry(
+        container,
+        height=ENTRY_HEIGHT,
+        corner_radius=CONTROL_CORNER_RADIUS,
+        font=body_font,
+    )
+    search_entry.grid(row=1, column=1, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
+
+    CTkLabel(container, text="Search By", font=label_font).grid(
+        row=1, column=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY
+    )
+    search_by = CTkComboBox(
+        container,
+        values=SEARCH_BY,
+        height=ENTRY_HEIGHT,
+        corner_radius=CONTROL_CORNER_RADIUS,
+        font=body_font,
+    )
     search_by.set("ItemCode" if "ItemCode" in SEARCH_BY else SEARCH_BY[0])
-    search_by.grid(row=0, column=3, sticky="ew", padx=8, pady=6)
+    search_by.grid(row=1, column=3, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
+
+    table_style = ttk.Style()
+    table_style.configure(
+        "App.Treeview",
+        font=("Segoe UI", TABLE_FONT_SIZE),
+        rowheight=TABLE_ROW_HEIGHT,
+    )
+    table_style.configure(
+        "App.Treeview.Heading",
+        font=("Segoe UI", TABLE_HEADING_FONT_SIZE, "bold"),
+    )
 
     columns = [c["name"] for c in COLUMNS]
-    results_tree = ttk.Treeview(container, columns=columns, show="headings")
+    default_column_width = 138
+    results_tree = ttk.Treeview(container, columns=columns, show="headings", style="App.Treeview")
     for col_name in columns:
-        results_tree.heading(col_name, text=col_name)
-        results_tree.column(col_name, width=130, stretch=True)
+        results_tree.heading(col_name, text=col_name, anchor="center")
+        results_tree.column(col_name, width=default_column_width, stretch=True, anchor="center")
 
-    results_tree.grid(row=1, column=0, columnspan=5, sticky="nsew", padx=8, pady=8)
+    results_tree.grid(row=2, column=0, columnspan=5, sticky="nsew", padx=ROW_PADX, pady=8)
 
-    y_scroll = ttk.Scrollbar(container, orient="vertical", command=results_tree.yview)
-    y_scroll.grid(row=1, column=5, sticky="ns", pady=8)
+    y_scroll = CTkScrollbar(container, orientation="vertical", command=results_tree.yview)
+    y_scroll.grid(row=2, column=5, sticky="ns", pady=8)
     results_tree.configure(yscrollcommand=y_scroll.set)
+
+    x_scroll = CTkScrollbar(container, orientation="horizontal", command=results_tree.xview)
+    x_scroll.grid(row=3, column=0, columnspan=5, sticky="ew", padx=ROW_PADX, pady=(0, 8))
+    results_tree.configure(xscrollcommand=x_scroll.set)
+
+    hidden_columns = set()
+    column_visibility_vars = {}
+
+    def hide_column(selected):
+        if selected not in columns:
+            return
+
+        hidden_columns.add(selected)
+        results_tree.column(selected, width=0, minwidth=0, stretch=False)
+
+        var = column_visibility_vars.get(selected)
+        if var is not None and var.get():
+            var.set(False)
+
+    def show_column(selected):
+        if selected not in columns:
+            return
+
+        hidden_columns.discard(selected)
+        results_tree.column(selected, width=default_column_width, minwidth=20, stretch=True)
+
+        var = column_visibility_vars.get(selected)
+        if var is not None and not var.get():
+            var.set(True)
+
+    def show_all_columns():
+        hidden_columns.clear()
+        for col_name in columns:
+            results_tree.column(col_name, width=default_column_width, minwidth=20, stretch=True)
+
+        for col_name in columns:
+            var = column_visibility_vars.get(col_name)
+            if var is not None:
+                var.set(True)
+
+    def hide_all_columns():
+        hidden_columns.clear()
+        for col_name in columns:
+            hidden_columns.add(col_name)
+            results_tree.column(col_name, width=0, minwidth=0, stretch=False)
+
+        for col_name in columns:
+            var = column_visibility_vars.get(col_name)
+            if var is not None:
+                var.set(False)
+
+    def _on_column_toggle(column_name):
+        var = column_visibility_vars.get(column_name)
+        if var is None:
+            return
+
+        if var.get():
+            show_column(column_name)
+        else:
+            hide_column(column_name)
+
+    def open_columns_panel():
+        panel = CTkToplevel(tab)
+        panel.title("Choose Columns")
+        panel.geometry("360x520")
+        panel.transient(tab.winfo_toplevel())
+        panel.grab_set()
+
+        CTkLabel(panel, text="Column Visibility", font=CTkFont(size=16, weight="bold")).pack(
+            anchor="w", padx=12, pady=(12, 8)
+        )
+
+        list_frame = CTkScrollableFrame(panel, corner_radius=10)
+        list_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        column_visibility_vars.clear()
+        for col_name in columns:
+            is_visible = col_name not in hidden_columns
+            var = BooleanVar(value=is_visible)
+            column_visibility_vars[col_name] = var
+            CTkCheckBox(
+                list_frame,
+                text=col_name,
+                variable=var,
+                command=lambda c=col_name: _on_column_toggle(c),
+            ).pack(anchor="w", padx=8, pady=6)
+
+        actions = CTkFrame(panel, fg_color="transparent")
+        actions.pack(fill="x", padx=12, pady=(0, 12))
+        actions.grid_columnconfigure(0, weight=1)
+        actions.grid_columnconfigure(1, weight=1)
+        actions.grid_columnconfigure(2, weight=1)
+
+        CTkButton(
+            actions,
+            text="Hide All",
+            command=hide_all_columns,
+            height=BUTTON_HEIGHT,
+            corner_radius=BUTTON_CORNER_RADIUS,
+            font=body_font,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        CTkButton(
+            actions,
+            text="Show All",
+            command=show_all_columns,
+            height=BUTTON_HEIGHT,
+            corner_radius=BUTTON_CORNER_RADIUS,
+            font=body_font,
+        ).grid(row=0, column=1, sticky="ew", padx=6)
+
+        CTkButton(
+            actions,
+            text="Close",
+            command=panel.destroy,
+            height=BUTTON_HEIGHT,
+            corner_radius=BUTTON_CORNER_RADIUS,
+            font=body_font,
+        ).grid(row=0, column=2, sticky="ew", padx=(6, 0))
+
+    header_menu = Menu(results_tree, tearoff=0)
+
+    def on_header_right_click(event):
+        if results_tree.identify_region(event.x, event.y) != "heading":
+            return
+
+        col_id = results_tree.identify_column(event.x)
+        if not col_id or col_id == "#0":
+            return
+
+        col_index = int(col_id.replace("#", "")) - 1
+        if col_index < 0 or col_index >= len(columns):
+            return
+
+        col_name = columns[col_index]
+
+        header_menu.delete(0, "end")
+        header_menu.add_command(label=f"Hide '{col_name}'", command=lambda c=col_name: hide_column(c))
+        header_menu.add_separator()
+        header_menu.add_command(label="Column Visibility", command=open_columns_panel)
+        header_menu.add_command(label="Show All Columns", command=show_all_columns)
+        header_menu.tk_popup(event.x_root, event.y_root)
 
     refresh_button = None
 
@@ -87,20 +292,57 @@ def build_search_tab(tab):
             messagebox.showerror("Open File", f"Could not open file link:\n{exc}")
 
     results_tree.bind("<Double-1>", handle_cell_click)
+    results_tree.bind("<Button-3>", on_header_right_click)
 
     on_search()
 
-    CTkButton(container, text="Search", command=on_search).grid(
-        row=0, column=4, sticky="ew", padx=8, pady=6
+    column_visibility_text = "Column Visibility"
+    column_visibility_button_width = body_font.measure(column_visibility_text) + 26
+
+    CTkButton(
+        toolbar,
+        text=column_visibility_text,
+        command=open_columns_panel,
+        height=BUTTON_HEIGHT,
+        width=max(column_visibility_button_width, column_visibility_button_width + 10),
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+    ).pack(side="right")
+
+    top_actions = CTkFrame(container, fg_color="transparent")
+    top_actions.grid(row=1, column=4, sticky="e", padx=ROW_PADX, pady=ROW_PADY)
+
+    CTkButton(
+        top_actions,
+        text="Search",
+        command=on_search,
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+        width=110,
+    ).pack(side="left")
+    refresh_button = CTkButton(
+        container,
+        text="Refresh",
+        command=refresh_with_feedback,
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
     )
-    refresh_button = CTkButton(container, text="Refresh", command=refresh_with_feedback)
     refresh_button.grid(
-        row=2, column=0, sticky="w", padx=8, pady=6
+        row=4, column=0, sticky="w", padx=ROW_PADX, pady=10
     )
-    CTkButton(container, text="Open Workbook", command=open_workbook).grid(
-        row=2, column=4, sticky="ew", padx=8, pady=6
+    CTkButton(
+        container,
+        text="Open Workbook",
+        command=open_workbook,
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+    ).grid(
+        row=4, column=4, sticky="ew", padx=ROW_PADX, pady=10
     )
 
-    container.grid_columnconfigure(1, weight=1)
-    container.grid_columnconfigure(3, weight=1)
-    container.grid_rowconfigure(1, weight=1)
+    container.grid_columnconfigure(1, weight=1, minsize=220)
+    container.grid_columnconfigure(3, weight=1, minsize=170)
+    container.grid_rowconfigure(2, weight=1)
