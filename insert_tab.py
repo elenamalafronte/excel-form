@@ -112,19 +112,14 @@ def _update_description_field(description_widget, item_code_widget):
 
 def _bind_itemcode_autofill(item_code_widget, description_widget):
     """Wire ItemCode edits to description autofill.
-
-    Start with FocusOut so the autofill happens when the user leaves the
-    ItemCode field. If you want live updates while typing, switch this to a
-    KeyRelease binding later.
     """
-
     def _on_itemcode_event(event=None):
         _update_description_field(description_widget, item_code_widget)
 
     item_code_widget.bind("<FocusOut>", _on_itemcode_event)
 
-    # TODO: uncomment this line if you want autofill to run on every keystroke.
-    # item_code_widget.bind("<KeyRelease>", _on_itemcode_event)
+    # make autofill to run on every keystroke.
+    item_code_widget.bind("<KeyRelease>", _on_itemcode_event)
 
     return _on_itemcode_event
 
