@@ -3,11 +3,17 @@ import threading
 from tkinter import filedialog, messagebox
 from pathlib import Path
 
-from customtkinter import CTkButton, CTkEntry, CTkFrame, CTkLabel
+from customtkinter import CTkButton, CTkEntry, CTkFrame, CTkLabel, CTkTextbox, CTkScrollableFrame
 
 from config import COLUMNS, EXCEL_FILE, get_next_fileNumber, get_next_fileNumber_from_value
 from excel import append_row, load_sheet
 
+# TODO: start with fields being less wide than they already are
+# TODO: add dragger/something where you yourself can customise the width of the fields
+# TODO: make tab open to optimum size (now its too short so cant see the save button unless you fullscreen it)
+#   make default size big enough to show all fields + save button, but allow user to resize and have that size be remembered next time they open the app
+# TODO: add button where you click and it shows a panel where you can customise the number of fiels + their properties(required, text/number/general format etc) 
+#   then save that config chnage into the COLUMNS variable in config.py
 
 def _open_file_picker(entry_widget):
     file_path = filedialog.askopenfilename(title="Select file for FileLink")
@@ -98,7 +104,7 @@ def _update_description_field(description_widget, item_code_widget):
 
     if not item_code:
         description_widget.configure(state="normal")
-        description_widget.delete(0, "end")
+        description_widget.delete("1.0", "end")
         description_widget.configure(state="disabled")
         return
 
@@ -106,8 +112,8 @@ def _update_description_field(description_widget, item_code_widget):
     description = _lookup_description_for_itemcode(item_code, rows)
 
     description_widget.configure(state="normal")
-    description_widget.delete(0, "end")
-    description_widget.insert(0, description)
+    description_widget.delete("1.0", "end")
+    description_widget.insert("1.0", description)
     description_widget.configure(state="disabled")
 
 
@@ -126,8 +132,12 @@ def _bind_itemcode_autofill(item_code_widget, description_widget):
 
 
 def build_insert_tab(tab):
-    container = CTkFrame(tab)
-    container.pack(fill="both", expand=True, padx=12, pady=12)
+    outer_container = CTkFrame(tab)
+    outer_container.pack(fill="both", expand=True)
+
+    # Create an inner container with fixed width for narrower fields, centered
+    container = CTkScrollableFrame(outer_container, width=670, height=800)
+    container.pack(pady=12)
 
     next_file_number_state = {"value": None}
 
@@ -143,22 +153,23 @@ def build_insert_tab(tab):
         CTkLabel(container, text=col["name"]).grid(row=row_idx, column=0, sticky="w", padx=8, pady=6)
 
         if col["name"] == "File Number":
-            widget = CTkEntry(container)
+            widget = CTkEntry(container, width=300)
             widget.insert(0, "Auto-generated on Save")
             widget.configure(state="disabled")
             widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
         elif col["name"] == "Description":
-            widget = CTkEntry(container, placeholder_text="Auto-filled from ItemCode")
+            widget = CTkTextbox(container, width=300, height=50)
+            widget.insert("1.0", "Auto-filled from ItemCode")
             widget.configure(state="disabled")
             widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
             description_widget = widget
         elif col["name"] == "ItemCode":
-            widget = CTkEntry(container)
+            widget = CTkEntry(container, width=300)
             widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
             fields["ItemCode"] = widget
             item_code_widget = widget
         elif col.get("type") == "filelink":
-            widget = CTkEntry(container)
+            widget = CTkEntry(container, width=300)
             widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
             CTkButton(
                 container,
@@ -167,15 +178,13 @@ def build_insert_tab(tab):
                 command=lambda w=widget: _open_file_picker(w),
             ).grid(row=row_idx, column=2, sticky="w", padx=8, pady=6)
         else:
-            widget = CTkEntry(container)
+            widget = CTkEntry(container, width=300)
             widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
 
         fields[col["name"]] = widget
 
     if item_code_widget is not None and description_widget is not None:
         _bind_itemcode_autofill(item_code_widget, description_widget)
-
-    container.grid_columnconfigure(1, weight=1)
 
     # keep a reference so the thread callback can re-enable it
     save_button = CTkButton(container, text="Save Row")
@@ -196,7 +205,7 @@ def build_insert_tab(tab):
             if name == "Description":
                 # The insert tab owns this value now.
                 # If the ItemCode lookup has not run yet, this may still be blank.
-                data[name] = fields[name].get().strip()
+                data[name] = fields[name].get("1.0", "end").strip()
                 continue
 
             value = fields[name].get().strip()
