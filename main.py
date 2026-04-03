@@ -6,14 +6,14 @@ from search_tab import build_search_tab
 
 def build_app():
 	set_appearance_mode("System")
-	set_default_color_theme("green")
+	set_default_color_theme("dark-blue")
 
 	app = CTk()
 	app.title("Excel Form")
-	app.geometry("1200x700")
+	app.geometry("740x840")
 
 	tabview = CTkTabview(app)
-	tabview.pack(fill="both", expand=True, padx=16, pady=16)
+	tabview.pack(fill="both", expand=True, padx=0, pady=10)
 
 	tab_insert = tabview.add("Insert")
 	tab_search = tabview.add("Search")
