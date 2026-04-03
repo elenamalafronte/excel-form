@@ -70,11 +70,9 @@ def build_search_tab(tab):
 
     columns = [c["name"] for c in COLUMNS]
     results_tree = ttk.Treeview(container, columns=columns, show="headings", style="App.Treeview")
-    centered_columns = {"File Number", "Qty_EA", "Qty_mt", "Rev", "PAGENr"}
     for col_name in columns:
-        results_tree.heading(col_name, text=col_name)
-        anchor = "center" if col_name in centered_columns else "w"
-        results_tree.column(col_name, width=138, stretch=True, anchor=anchor)
+        results_tree.heading(col_name, text=col_name, anchor="center")
+        results_tree.column(col_name, width=138, stretch=True, anchor="center")
 
     results_tree.grid(row=2, column=0, columnspan=5, sticky="nsew", padx=ROW_PADX, pady=8)
 

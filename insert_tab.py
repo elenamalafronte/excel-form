@@ -25,7 +25,6 @@ from ui_style import (
     TEXTBOX_HEIGHT,
 )
 
-# TODO: make tab buttons for insert and search tab wider
 # TODO: numbers in table in search tab need to be centered in their cell (now are left aligned)
 # TODO: make font in table in search tab bigger (now too small)
 # TODO: add dragger/something where you yourself can customise the width of the fields
