@@ -102,9 +102,15 @@ def _find_sheet_zip_path(file_path, sheet_name):
     return f"xl/{target}" if not target.startswith("/") else target
 
 
-def _build_row_xml(row_idx, row_values):
-    """Return the XML string for one worksheet row, using inline strings."""
+def _build_row_xml(row_idx, row_values, cached_values=None):
+    """Return the XML string for one worksheet row, using inline strings.
+
+    cached_values: optional {col_idx: value} — for formula cells, the pre-computed
+    result is written as <v> so openpyxl data_only=True can read it immediately
+    without waiting for Excel to recalculate.
+    """
     cells = []
+    cached_values = cached_values or {}
     for col_idx, value in enumerate(row_values):
         if value is None or value == "":
             continue
@@ -113,7 +119,12 @@ def _build_row_xml(row_idx, row_values):
         val = str(value)
         if val.startswith("="):
             formula = val[1:].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            cells.append(f'<c r="{cell_ref}"><f>{formula}</f></c>')
+            cached = cached_values.get(col_idx)
+            if cached is not None and cached != "":
+                safe_v = str(cached).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                cells.append(f'<c r="{cell_ref}" t="str"><f>{formula}</f><v>{safe_v}</v></c>')
+            else:
+                cells.append(f'<c r="{cell_ref}"><f>{formula}</f></c>')
         else:
             try:
                 num = float(val)
@@ -125,7 +136,7 @@ def _build_row_xml(row_idx, row_values):
     return f'<row r="{row_idx}">{"".join(cells)}</row>'
 
 
-def _zip_append_row(file_path, row_values, new_row_idx):
+def _zip_append_row(file_path, row_values, new_row_idx, cached_values=None):
     """Append one row by rewriting only the Heat Number worksheet XML in the ZIP.
 
     CREXPD01's bytes are copied verbatim — it is never parsed or serialized.
@@ -133,7 +144,7 @@ def _zip_append_row(file_path, row_values, new_row_idx):
     15 000+ rows of source data on every insert.
     """
     sheet_zip_path = _find_sheet_zip_path(file_path, "Heat Number")
-    new_row_xml = _build_row_xml(new_row_idx, row_values)
+    new_row_xml = _build_row_xml(new_row_idx, row_values, cached_values)
 
     with zipfile.ZipFile(file_path, "r") as z:
         sheet_str = z.read(sheet_zip_path).decode("utf-8")
@@ -172,7 +183,8 @@ def _build_description_index(wb):
 
     Locates ItemCode and Detailed Description columns by header name
     (case- and whitespace-insensitive), falling back to column O for ItemCode
-    when the header scan finds no match.
+    when the header scan finds no match.  Uses a single iter_rows pass to
+    avoid double-stream issues with read-only worksheets.
     """
     ws_source = None
     if "CREXPD01" in wb.sheetnames:
@@ -185,31 +197,29 @@ def _build_description_index(wb):
 
     item_code_col = None
     description_col = None
-
-    header_row = next(ws_source.iter_rows(min_row=1, max_row=1), None)
-    if header_row:
-        for col_idx, cell in enumerate(header_row):
-            val = str(cell.value or "").strip().lower().replace(" ", "").replace("_", "")
-            if "itemcode" in val:
-                item_code_col = col_idx
-            if "detaileddescription" in val or val == "description":
-                description_col = col_idx
-
-    if item_code_col is None:
-        item_code_col = _CREXPD01_ITEMCODE_COL_FALLBACK
-
-    if description_col is None:
-        return {}
-
     index = {}
-    for row in ws_source.iter_rows(min_row=2):
-        try:
-            ic_val = row[item_code_col].value
-            desc_val = row[description_col].value
-        except IndexError:
-            continue
-        if ic_val:
-            index[str(ic_val).strip().upper()] = desc_val or ""
+
+    for row_num, row in enumerate(ws_source.iter_rows(min_row=1)):
+        if row_num == 0:
+            for col_idx, cell in enumerate(row):
+                val = str(cell.value or "").strip().lower().replace(" ", "").replace("_", "")
+                if "itemcode" in val:
+                    item_code_col = col_idx
+                if "detaileddescription" in val or val == "description":
+                    description_col = col_idx
+            if item_code_col is None:
+                item_code_col = _CREXPD01_ITEMCODE_COL_FALLBACK
+            if description_col is None:
+                return {}
+        else:
+            try:
+                ic_val = row[item_code_col].value
+                desc_val = row[description_col].value
+            except IndexError:
+                continue
+            if ic_val:
+                index[str(ic_val).strip().upper()] = desc_val or ""
+
     return index
 
 
@@ -282,8 +292,9 @@ def append_row(data: dict):
     if not file_path.exists():
         raise FileNotFoundError(f"Workbook not found: {EXCEL_FILE}")
 
-    # Phase 1 – find true last data row (openpyxl's max_row metadata is unreliable)
+    # Phase 1 – find true last data row and build description index in one pass
     last_data_row = 1
+    desc_index = {}
     try:
         wb_ro = load_workbook(file_path, read_only=True, data_only=True)
         ws_ro = _get_form_sheet_for_read(wb_ro)
@@ -291,6 +302,7 @@ def append_row(data: dict):
             for row in ws_ro.iter_rows(min_row=2):
                 if any(cell.value is not None for cell in row):
                     last_data_row = row[0].row
+        desc_index = _build_description_index(wb_ro)
         wb_ro.close()
     except Exception:
         pass
@@ -307,14 +319,20 @@ def append_row(data: dict):
         (i for i, c in enumerate(COLUMNS) if c["name"] == "ItemCode"), None
     )
 
+    cached_values = {}
     if desc_col_idx is not None and item_code_col_idx is not None:
         col_letter = chr(ord("A") + item_code_col_idx)
         row_values[desc_col_idx] = build_description_formula(
             f"{col_letter}{new_row_idx}", "CREXPD01"
         )
+        item_code = data.get("ItemCode", "")
+        if item_code and desc_index:
+            description = desc_index.get(str(item_code).strip().upper(), "")
+            if description:
+                cached_values[desc_col_idx] = description
 
     try:
-        _zip_append_row(file_path, row_values, new_row_idx)
+        _zip_append_row(file_path, row_values, new_row_idx, cached_values)
     except PermissionError as exc:
         raise PermissionError(
             f"Cannot save workbook. Close '{EXCEL_FILE}' in Excel and try again."
