@@ -1,0 +1,19 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor settings
+.vscode/
+
+# Generated workbook and Excel temp files
+Heat number summary.xlsm
+Heat number summary.xlsx
+~$*.xlsm
+~$*.xlsx
