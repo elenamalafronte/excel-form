@@ -11,7 +11,6 @@ from config import (
     EXCEL_FILE,
     FILE_NUMBER_PATTERN,
     SEARCH_BY,
-    build_description_formula,
 )
 
 
@@ -408,34 +407,13 @@ def append_row(data: dict):
     except Exception:
         pass
 
-    desc_index = _get_desc_index(file_path)
-
     # Phase 2 – ZIP surgery: rewrite only the Heat Number sheet XML
     new_row_idx = last_data_row + 1
 
     row_values = [data.get(col["name"], "") for col in COLUMNS]
 
-    desc_col_idx = next(
-        (i for i, c in enumerate(COLUMNS) if c["name"] == "Description"), None
-    )
-    item_code_col_idx = next(
-        (i for i, c in enumerate(COLUMNS) if c["name"] == "ItemCode"), None
-    )
-
-    cached_values = {}
-    if desc_col_idx is not None and item_code_col_idx is not None:
-        col_letter = chr(ord("A") + item_code_col_idx)
-        row_values[desc_col_idx] = build_description_formula(
-            f"{col_letter}{new_row_idx}", "CREXPD01"
-        )
-        item_code = data.get("ItemCode", "")
-        if item_code and desc_index:
-            description = desc_index.get(str(item_code).strip().upper(), "")
-            if description:
-                cached_values[desc_col_idx] = description
-
     try:
-        _zip_append_row(file_path, row_values, new_row_idx, cached_values)
+        _zip_append_row(file_path, row_values, new_row_idx)
     except PermissionError as exc:
         raise PermissionError(
             f"Cannot save workbook. Close '{EXCEL_FILE}' in Excel and try again."

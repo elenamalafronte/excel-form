@@ -1,10 +1,11 @@
 import time
 import threading
 from tkinter import filedialog, messagebox
+from pathlib import Path
 
 from customtkinter import CTkButton, CTkEntry, CTkFrame, CTkLabel
 
-from config import COLUMNS, get_next_fileNumber, get_next_fileNumber_from_value
+from config import COLUMNS, EXCEL_FILE, get_next_fileNumber, get_next_fileNumber_from_value
 from excel import append_row, load_sheet
 
 
@@ -36,6 +37,98 @@ def _show_timed_error(message, elapsed_seconds):
     _show_error("Save", f"{message}\nElapsed: {elapsed_seconds:.3f}s")
 
 
+_sheet_rows_cache = None
+_sheet_rows_cache_mtime = None
+
+
+def _get_cached_sheet_rows():
+    """Return workbook rows for autofill, reloading only when the file changes.
+
+    TODO: if you later want even faster autofill, keep this cache warm after
+    startup instead of waiting for the first ItemCode lookup.
+    """
+    global _sheet_rows_cache, _sheet_rows_cache_mtime
+
+    workbook_path = Path(EXCEL_FILE)
+    if not workbook_path.exists():
+        _sheet_rows_cache = []
+        _sheet_rows_cache_mtime = None
+        return _sheet_rows_cache
+
+    try:
+        current_mtime = workbook_path.stat().st_mtime
+    except OSError:
+        return load_sheet()
+
+    if current_mtime != _sheet_rows_cache_mtime:
+        _sheet_rows_cache = load_sheet()
+        _sheet_rows_cache_mtime = current_mtime
+
+    return _sheet_rows_cache
+
+
+def _lookup_description_for_itemcode(item_code, rows):
+    """Return the description for an ItemCode.
+
+    This is the one place where the autofill rule lives.
+
+    If your workbook ever changes shape, update the matching logic here and
+    leave the rest of the UI code alone.
+    """
+    item_code = str(item_code).strip().upper()
+
+    for row in rows or []:
+        if str(row.get("ItemCode", "")).strip().upper() == item_code:
+            # TODO: if your source description column has a different name,
+            # change "Description" here only.
+            return row.get("Description", "") or ""
+
+    # Return an empty string when nothing matches so the field clears cleanly.
+    return ""
+
+
+def _update_description_field(description_widget, item_code_widget):
+    """Update the Description field from the current ItemCode value.
+
+    This is intentionally small: get the current ItemCode, look up the
+    description, and write it into the disabled field.
+    """
+    item_code = item_code_widget.get().strip()
+
+    if not item_code:
+        description_widget.configure(state="normal")
+        description_widget.delete(0, "end")
+        description_widget.configure(state="disabled")
+        return
+
+    rows = _get_cached_sheet_rows()
+    description = _lookup_description_for_itemcode(item_code, rows)
+
+    description_widget.configure(state="normal")
+    description_widget.delete(0, "end")
+    description_widget.insert(0, description)
+    description_widget.configure(state="disabled")
+
+
+def _bind_itemcode_autofill(item_code_widget, description_widget):
+    """Wire ItemCode edits to description autofill.
+
+    Start with FocusOut so the autofill happens when the user leaves the
+    ItemCode field. If you want live updates while typing, switch this to a
+    KeyRelease binding later.
+    """
+
+    def _on_itemcode_event(event=None):
+        _update_description_field(description_widget, item_code_widget)
+
+    item_code_widget.bind("<FocusOut>", _on_itemcode_event)
+
+    # TODO: uncomment this line if you want autofill to run on every keystroke.
+    # item_code_widget.bind("<KeyRelease>", _on_itemcode_event)
+
+    return _on_itemcode_event
+
+
 def build_insert_tab(tab):
     container = CTkFrame(tab)
     container.pack(fill="both", expand=True, padx=12, pady=12)
@@ -48,6 +141,8 @@ def build_insert_tab(tab):
         next_file_number_state["value"] = "01-01A"
 
     fields = {}
+    item_code_widget = None
+    description_widget = None
     for row_idx, col in enumerate(COLUMNS):
         CTkLabel(container, text=col["name"]).grid(row=row_idx, column=0, sticky="w", padx=8, pady=6)
 
@@ -57,10 +152,15 @@ def build_insert_tab(tab):
             widget.configure(state="disabled")
             widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
         elif col["name"] == "Description":
-            widget = CTkEntry(container)
-            widget.insert(0, "Auto-filled from ItemCode")
+            widget = CTkEntry(container, placeholder_text="Auto-filled from ItemCode")
             widget.configure(state="disabled")
             widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
+            description_widget = widget
+        elif col["name"] == "ItemCode":
+            widget = CTkEntry(container)
+            widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
+            fields["ItemCode"] = widget
+            item_code_widget = widget
         elif col.get("type") == "filelink":
             widget = CTkEntry(container)
             widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
@@ -75,6 +175,9 @@ def build_insert_tab(tab):
             widget.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=6)
 
         fields[col["name"]] = widget
+
+    if item_code_widget is not None and description_widget is not None:
+        _bind_itemcode_autofill(item_code_widget, description_widget)
 
     container.grid_columnconfigure(1, weight=1)
 
@@ -95,8 +198,9 @@ def build_insert_tab(tab):
                 data[name] = file_number
                 continue
             if name == "Description":
-                # auto-filled by formula in excel.py — don't read the disabled widget
-                data[name] = ""
+                # The insert tab owns this value now.
+                # If the ItemCode lookup has not run yet, this may still be blank.
+                data[name] = fields[name].get().strip()
                 continue
 
             value = fields[name].get().strip()
@@ -129,7 +233,8 @@ def build_insert_tab(tab):
             next_file_number_state["value"] = None
 
         for col in COLUMNS:
-            # skip disabled/auto fields — calling .delete() on them raises TclError
+            # Skip auto-filled fields. They are managed separately and should not
+            # be cleared here unless you explicitly want to reset them after save.
             if col["name"] in ("File Number", "Description"):
                 continue
             fields[col["name"]].delete(0, "end")
