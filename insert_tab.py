@@ -9,6 +9,8 @@ from config import COLUMNS, EXCEL_FILE, get_next_fileNumber, get_next_fileNumber
 from excel import append_row, load_sheet
 
 # TODO: make tab buttons for insert and search tab wider
+# TODO: numbers in table in search tab need to be centered in their cell (now are left aligned)
+# TODO: make font in table in search tab bigger (now too small)
 # TODO: add dragger/something where you yourself can customise the width of the fields
 # TODO: make tab open to optimum size (now its too short so cant see the save button unless you fullscreen it)
 #   make default size big enough to show all fields + save button, but allow user to resize and have that size be remembered next time they open the app
