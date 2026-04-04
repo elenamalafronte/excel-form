@@ -734,6 +734,10 @@ def build_insert_tab(tab):
         elapsed_seconds = time.perf_counter() - started_at
         save_row_in_progress["value"] = False
         _set_button_saving_state(save_button, False, idle_text="Save Row")
+
+        # Ensure immediate ItemCode autofill uses fresh workbook rows.
+        _invalidate_sheet_rows_cache()
+
         _show_timed_success(file_number, elapsed_seconds, elapsed_before_save, elapsed_after_save)
         try:
             next_file_number_state["value"] = get_next_fileNumber_from_value(file_number)
