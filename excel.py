@@ -592,6 +592,59 @@ def sync_form_sheet_columns(old_columns, new_columns):
     _invalidate_desc_index_cache()
 
 
+def update_file_link(file_number: str, file_link: str) -> bool:
+    """Update FileLink for a row in Heat Number sheet identified by File Number.
+
+    Returns True when a matching row was updated, else False.
+    """
+    if not file_number:
+        return False
+
+    file_path = Path(EXCEL_FILE)
+    if not file_path.exists():
+        raise FileNotFoundError(f"Workbook not found: {EXCEL_FILE}")
+
+    wb = _open_workbook()
+    try:
+        _, ws_form = _get_layout_sheets(wb)
+
+        headers = []
+        for col_idx in range(1, ws_form.max_column + 1):
+            value = ws_form.cell(row=1, column=col_idx).value
+            headers.append(str(value).strip() if value is not None else "")
+
+        try:
+            file_number_idx = headers.index("File Number") + 1
+            file_link_idx = headers.index("FileLink") + 1
+        except ValueError:
+            return False
+
+        target = str(file_number).strip().upper()
+        updated = False
+
+        for row_idx in range(2, ws_form.max_row + 1):
+            current_value = ws_form.cell(row=row_idx, column=file_number_idx).value
+            if str(current_value or "").strip().upper() != target:
+                continue
+
+            link_cell = ws_form.cell(row=row_idx, column=file_link_idx)
+            link_cell.value = file_link
+            if file_link:
+                link_cell.hyperlink = file_link
+                link_cell.style = "Hyperlink"
+            else:
+                link_cell.hyperlink = None
+
+            updated = True
+            break
+
+        if updated:
+            wb.save(file_path)
+        return updated
+    finally:
+        wb.close()
+
+
 def search_rows(search_value, search_column="ItemCode"):
     rows = load_sheet()
     if not search_value:

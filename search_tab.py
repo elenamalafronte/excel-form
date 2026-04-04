@@ -1,5 +1,5 @@
 import os
-from tkinter import BooleanVar, Menu, messagebox, ttk
+from tkinter import BooleanVar, Menu, filedialog, messagebox, ttk
 
 from customtkinter import (
     CTkButton,
@@ -15,7 +15,7 @@ from customtkinter import (
 )
 
 from config import COLUMNS, EXCEL_FILE, SEARCH_BY
-from excel import search_rows
+from excel import search_rows, update_file_link
 from ui_style import (
     BODY_FONT_SIZE,
     BUTTON_CORNER_RADIUS,
@@ -239,6 +239,52 @@ def build_search_tab(tab):
 
     refresh_button = None
 
+    file_number_col_idx = columns.index("File Number") if "File Number" in columns else -1
+    file_link_col_idx = columns.index("FileLink") if "FileLink" in columns else -1
+
+    selected_info_label = None
+    upload_pdf_button = None
+    selected_actions = CTkFrame(container, fg_color="transparent")
+    selected_actions.grid(row=4, column=1, columnspan=3, sticky="w", padx=ROW_PADX, pady=10)
+    selected_actions.grid_remove()
+
+    def _selected_row_values():
+        selected = results_tree.selection()
+        if not selected:
+            return None
+        values = results_tree.item(selected[0], "values")
+        return list(values) if values else None
+
+    def _set_selected_actions_visible(visible):
+        if visible:
+            selected_actions.grid()
+        else:
+            selected_actions.grid_remove()
+
+    def _update_selected_actions_ui():
+        if selected_info_label is None or upload_pdf_button is None:
+            return
+
+        values = _selected_row_values()
+        if not values:
+            _set_selected_actions_visible(False)
+            return
+
+        file_number = ""
+        file_link = ""
+        if 0 <= file_number_col_idx < len(values):
+            file_number = str(values[file_number_col_idx] or "").strip()
+        if 0 <= file_link_col_idx < len(values):
+            file_link = str(values[file_link_col_idx] or "").strip()
+
+        if not file_number:
+            _set_selected_actions_visible(False)
+            return
+
+        selected_info_label.configure(text=f"Selected: {file_number}")
+        upload_pdf_button.configure(text="Upload PDF" if not file_link else "Replace PDF")
+        _set_selected_actions_visible(True)
+
     def on_search():
         rows = search_rows(search_entry.get().strip(), search_by.get())
         results_tree.delete(*results_tree.get_children())
@@ -258,6 +304,50 @@ def build_search_tab(tab):
             on_search()
         finally:
             refresh_button.configure(state="normal", text=original_text)
+
+    def upload_pdf_for_selected_row():
+        values = _selected_row_values()
+        if not values or file_number_col_idx < 0:
+            messagebox.showwarning("Upload PDF", "Select a row first.")
+            return
+
+        file_number = str(values[file_number_col_idx] if file_number_col_idx < len(values) else "").strip()
+        if not file_number:
+            messagebox.showwarning("Upload PDF", "Selected row has no File Number.")
+            return
+
+        file_path = filedialog.askopenfilename(
+            title="Select PDF",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+
+        original_text = upload_pdf_button.cget("text") if upload_pdf_button is not None else "Upload PDF"
+        if upload_pdf_button is not None:
+            upload_pdf_button.configure(state="disabled", text="Uploading PDF...")
+            container.update_idletasks()
+
+        try:
+            updated = update_file_link(file_number, file_path)
+            if not updated:
+                messagebox.showwarning("Upload PDF", "Could not find the selected row in workbook.")
+                return
+
+            on_search()
+            # Restore selection after refresh when possible.
+            for item_id in results_tree.get_children():
+                row_values = results_tree.item(item_id, "values")
+                if file_number_col_idx < len(row_values) and str(row_values[file_number_col_idx] or "").strip() == file_number:
+                    results_tree.selection_set(item_id)
+                    results_tree.focus(item_id)
+                    break
+            _update_selected_actions_ui()
+        except Exception as exc:
+            messagebox.showerror("Upload PDF", f"Could not save PDF link:\n{exc}")
+        finally:
+            if upload_pdf_button is not None:
+                upload_pdf_button.configure(state="normal", text=original_text)
 
     tab.refresh_search = on_search
     tab.auto_refresh_search = lambda: on_search()
@@ -293,6 +383,7 @@ def build_search_tab(tab):
 
     results_tree.bind("<Double-1>", handle_cell_click)
     results_tree.bind("<Button-3>", on_header_right_click)
+    results_tree.bind("<<TreeviewSelect>>", lambda event: _update_selected_actions_ui())
 
     on_search()
 
@@ -342,6 +433,18 @@ def build_search_tab(tab):
     ).grid(
         row=4, column=4, sticky="ew", padx=ROW_PADX, pady=10
     )
+
+    selected_info_label = CTkLabel(selected_actions, text="", font=label_font)
+    selected_info_label.pack(side="left", padx=(0, 10))
+    upload_pdf_button = CTkButton(
+        selected_actions,
+        text="Upload PDF",
+        command=upload_pdf_for_selected_row,
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+    )
+    upload_pdf_button.pack(side="left")
 
     container.grid_columnconfigure(1, weight=1, minsize=220)
     container.grid_columnconfigure(3, weight=1, minsize=170)
