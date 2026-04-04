@@ -204,6 +204,13 @@ def build_insert_tab(tab):
         )
 
         row_models = []
+        removed_rows_stack = []
+        undo_button = None
+
+        def _update_undo_button_state():
+            if undo_button is None:
+                return
+            undo_button.configure(state="normal" if removed_rows_stack else "disabled")
 
         def _reflow_rows():
             for idx, row in enumerate(row_models, start=1):
@@ -217,6 +224,14 @@ def build_insert_tab(tab):
                 messagebox.showwarning("Customize Fields", "At least one field is required.")
                 return
 
+            row_index = row_models.index(model)
+            removed_field = {
+                "name": model["name_entry"].get().strip(),
+                "type": model["type_combo"].get().strip().lower() or "text",
+                "required": bool(model["required_var"].get()),
+                "original_name": model.get("original_name"),
+            }
+
             for widget in (
                 model["name_entry"],
                 model["type_combo"],
@@ -226,9 +241,22 @@ def build_insert_tab(tab):
                 widget.destroy()
 
             row_models.remove(model)
+            removed_rows_stack.append({"index": row_index, "field": removed_field})
             _reflow_rows()
+            _update_undo_button_state()
 
-        def _add_row(initial=None):
+        def _undo_remove_row():
+            if not removed_rows_stack:
+                return
+
+            removed_entry = removed_rows_stack.pop()
+            _add_row(
+                initial=removed_entry["field"],
+                insert_at=min(max(0, removed_entry["index"]), len(row_models)),
+            )
+            _update_undo_button_state()
+
+        def _add_row(initial=None, insert_at=None):
             initial = initial or {}
             required_var = BooleanVar(value=bool(initial.get("required", False)))
 
@@ -242,7 +270,7 @@ def build_insert_tab(tab):
             required_check = CTkCheckBox(rows_frame, text="", variable=required_var)
 
             model = {
-                "original_name": initial.get("name"),
+                "original_name": initial.get("original_name", initial.get("name")),
                 "name_entry": name_entry,
                 "type_combo": type_combo,
                 "required_var": required_var,
@@ -258,7 +286,10 @@ def build_insert_tab(tab):
             )
             model["remove_btn"] = remove_btn
 
-            row_models.append(model)
+            if insert_at is None or insert_at < 0 or insert_at > len(row_models):
+                row_models.append(model)
+            else:
+                row_models.insert(insert_at, model)
             _reflow_rows()
 
         def _save_customized_fields():
@@ -352,6 +383,9 @@ def build_insert_tab(tab):
         buttons.pack(fill="x", padx=12, pady=(0, 12))
 
         CTkButton(buttons, text="Add Field", width=100, command=lambda: _add_row()).pack(side="left")
+        undo_button = CTkButton(buttons, text="Undo Remove", width=120, command=_undo_remove_row)
+        undo_button.pack(side="left", padx=(8, 0))
+        _update_undo_button_state()
         CTkButton(buttons, text="Cancel", width=100, command=panel.destroy).pack(side="right")
         CTkButton(buttons, text="Save", width=100, command=_save_customized_fields).pack(
             side="right", padx=(0, 8)
