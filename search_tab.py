@@ -1,5 +1,7 @@
 import os
+import textwrap
 from tkinter import BooleanVar, Menu, filedialog, messagebox
+from tkinter import font as tkfont
 
 from customtkinter import (
     CTkButton,
@@ -159,6 +161,35 @@ def build_search_tab(tab):
         # Recompute from text so rows can both grow and shrink after width changes.
         results_sheet.row_height("all", "text", only_set_if_too_small=False, redraw=redraw)
 
+    def recompute_header_height():
+        # Set header height to exactly the max wrapped line count among visible headers.
+        header_font = tkfont.Font(font=results_sheet.header_font())
+        char_px = max(header_font.measure("0"), 1)
+        widths = results_sheet.get_column_widths()
+
+        max_lines = 1
+        for idx, col_name in enumerate(columns):
+            if col_name in hidden_columns:
+                continue
+
+            col_width = int(widths[idx]) if idx < len(widths) else default_column_width
+            usable_width = max(col_width - 14, 10)
+            chars_per_line = max(1, int(usable_width / char_px))
+
+            line_count = 0
+            for part in str(col_name).splitlines() or [""]:
+                wrapped = textwrap.wrap(
+                    part,
+                    width=chars_per_line,
+                    break_long_words=True,
+                    break_on_hyphens=False,
+                ) or [""]
+                line_count += len(wrapped)
+
+            max_lines = max(max_lines, line_count)
+
+        results_sheet.set_header_height_lines(max_lines, redraw=False)
+
     def schedule_row_height_recalc(delay_ms=80):
         nonlocal row_height_recalc_job
         if row_height_recalc_job is not None:
@@ -167,6 +198,7 @@ def build_search_tab(tab):
         def _run():
             nonlocal row_height_recalc_job
             row_height_recalc_job = None
+            recompute_header_height()
             recompute_row_heights(redraw=True)
 
         row_height_recalc_job = tab.after(delay_ms, _run)
@@ -419,6 +451,7 @@ def build_search_tab(tab):
             data.append([("" if row.get(c["name"]) is None else row.get(c["name"])) for c in COLUMNS])
 
         results_sheet.headers(columns, redraw=False)
+        recompute_header_height()
         results_sheet.set_sheet_data(
             data,
             reset_col_positions=False,
