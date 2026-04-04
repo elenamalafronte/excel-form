@@ -194,24 +194,27 @@ def build_insert_tab(tab):
 
         rows_frame = CTkScrollableFrame(panel)
         rows_frame.pack(fill="both", expand=True, padx=12, pady=(0, 10))
-        rows_frame.grid_columnconfigure(0, weight=3)
-        rows_frame.grid_columnconfigure(1, weight=2)
-        rows_frame.grid_columnconfigure(2, weight=1)
+        rows_frame.grid_columnconfigure(0, weight=0)
+        rows_frame.grid_columnconfigure(1, weight=3)
+        rows_frame.grid_columnconfigure(2, weight=2)
         rows_frame.grid_columnconfigure(3, weight=0)
-        rows_frame.grid_columnconfigure(4, weight=0)
+        required_lane_width = 76
+        checkbox_size = 22
+        checkbox_pad_x = max((required_lane_width - checkbox_size) // 2, 0)
 
         CTkLabel(rows_frame, text="Field Name", font=CTkFont(size=13, weight="bold")).grid(
-            row=0, column=0, sticky="w", padx=8, pady=(8, 6)
-        )
-        CTkLabel(rows_frame, text="Type", font=CTkFont(size=13, weight="bold")).grid(
             row=0, column=1, sticky="w", padx=8, pady=(8, 6)
         )
-        CTkLabel(rows_frame, text="Required", font=CTkFont(size=13, weight="bold")).grid(
+        CTkLabel(rows_frame, text="Type", font=CTkFont(size=13, weight="bold")).grid(
             row=0, column=2, sticky="w", padx=8, pady=(8, 6)
         )
-        CTkLabel(rows_frame, text="Drag", font=CTkFont(size=13, weight="bold")).grid(
-            row=0, column=3, sticky="w", padx=8, pady=(8, 6)
-        )
+        CTkLabel(
+            rows_frame,
+            text="Required",
+            font=CTkFont(size=13, weight="bold"),
+            width=required_lane_width,
+            anchor="center",
+        ).grid(row=0, column=3, sticky="w", padx=(0, 0), pady=(8, 6))
 
         row_models = []
         removed_rows_stack = []
@@ -225,11 +228,10 @@ def build_insert_tab(tab):
 
         def _reflow_rows():
             for idx, row in enumerate(row_models, start=1):
-                row["name_entry"].grid(row=idx, column=0, sticky="ew", padx=8, pady=4)
-                row["type_combo"].grid(row=idx, column=1, sticky="ew", padx=8, pady=4)
-                row["required_check"].grid(row=idx, column=2, sticky="w", padx=8, pady=4)
-                row["drag_handle"].grid(row=idx, column=3, sticky="w", padx=8, pady=4)
-                row["remove_btn"].grid(row=idx, column=4, sticky="e", padx=8, pady=4)
+                row["drag_handle"].grid(row=idx, column=0, sticky="w", padx=(8, 4), pady=4)
+                row["name_entry"].grid(row=idx, column=1, sticky="ew", padx=8, pady=4)
+                row["type_combo"].grid(row=idx, column=2, sticky="ew", padx=8, pady=4)
+                row["action_cell"].grid(row=idx, column=3, sticky="w", padx=(6, 6), pady=4)
 
         def _move_row(model, target_index):
             if model not in row_models:
@@ -286,9 +288,8 @@ def build_insert_tab(tab):
             for widget in (
                 model["name_entry"],
                 model["type_combo"],
-                model["required_check"],
                 model["drag_handle"],
-                model["remove_btn"],
+                model["action_cell"],
             ):
                 widget.destroy()
 
@@ -319,7 +320,18 @@ def build_insert_tab(tab):
             initial_type = str(initial.get("type", "text")).strip().lower()
             type_combo.set(initial_type if initial_type in field_types else "text")
 
-            required_check = CTkCheckBox(rows_frame, text="", variable=required_var)
+            action_cell = CTkFrame(rows_frame, fg_color="transparent")
+
+            required_check = CTkCheckBox(
+                action_cell,
+                text="",
+                variable=required_var,
+                width=26,
+                checkbox_width=checkbox_size,
+                checkbox_height=checkbox_size,
+            )
+            required_check.pack(side="left", padx=(checkbox_pad_x, checkbox_pad_x))
+
             drag_handle = CTkLabel(
                 rows_frame,
                 text="::",
@@ -335,6 +347,7 @@ def build_insert_tab(tab):
                 "type_combo": type_combo,
                 "required_var": required_var,
                 "required_check": required_check,
+                "action_cell": action_cell,
                 "drag_handle": drag_handle,
                 "remove_btn": None,
             }
@@ -344,11 +357,12 @@ def build_insert_tab(tab):
             drag_handle.bind("<ButtonRelease-1>", _on_drag_end)
 
             remove_btn = CTkButton(
-                rows_frame,
+                action_cell,
                 text="Remove",
                 width=86,
                 command=lambda m=model: _remove_row(m),
             )
+            remove_btn.pack(side="left", padx=(12, 0))
             model["remove_btn"] = remove_btn
 
             if insert_at is None or insert_at < 0 or insert_at > len(row_models):
