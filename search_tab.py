@@ -1,5 +1,5 @@
 import os
-from tkinter import BooleanVar, Menu, filedialog, messagebox, ttk
+from tkinter import BooleanVar, Menu, filedialog, messagebox
 
 from customtkinter import (
     CTkButton,
@@ -9,10 +9,10 @@ from customtkinter import (
     CTkFont,
     CTkFrame,
     CTkLabel,
-    CTkScrollbar,
     CTkScrollableFrame,
     CTkToplevel,
 )
+from tksheet import Sheet
 
 from config import COLUMNS, EXCEL_FILE, SEARCH_BY
 from excel import recalc_workbook, search_rows, update_file_link
@@ -27,9 +27,6 @@ from ui_style import (
     ROW_PADX,
     ROW_PADY,
     SECTION_TITLE_SIZE,
-    TABLE_FONT_SIZE,
-    TABLE_HEADING_FONT_SIZE,
-    TABLE_ROW_HEIGHT,
 )
 
 
@@ -71,43 +68,143 @@ def build_search_tab(tab):
     search_by.set("ItemCode" if "ItemCode" in SEARCH_BY else SEARCH_BY[0])
     search_by.grid(row=1, column=3, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
 
-    table_style = ttk.Style()
-    table_style.configure(
-        "App.Treeview",
-        font=("Segoe UI", TABLE_FONT_SIZE),
-        rowheight=TABLE_ROW_HEIGHT,
-    )
-    table_style.configure(
-        "App.Treeview.Heading",
-        font=("Segoe UI", TABLE_HEADING_FONT_SIZE, "bold"),
-    )
-
     columns = [c["name"] for c in COLUMNS]
     default_column_width = 138
-    results_tree = ttk.Treeview(container, columns=columns, show="headings", style="App.Treeview")
-    for col_name in columns:
-        results_tree.heading(col_name, text=col_name, anchor="center")
-        results_tree.column(col_name, width=default_column_width, stretch=True, anchor="center")
-
-    results_tree.grid(row=2, column=0, columnspan=5, sticky="nsew", padx=ROW_PADX, pady=8)
-
-    y_scroll = CTkScrollbar(container, orientation="vertical", command=results_tree.yview)
-    y_scroll.grid(row=2, column=5, sticky="ns", pady=8)
-    results_tree.configure(yscrollcommand=y_scroll.set)
-
-    x_scroll = CTkScrollbar(container, orientation="horizontal", command=results_tree.xview)
-    x_scroll.grid(row=3, column=0, columnspan=5, sticky="ew", padx=ROW_PADX, pady=(0, 8))
-    results_tree.configure(xscrollcommand=x_scroll.set)
+    results_sheet = Sheet(
+        container,
+        headers=columns,
+        data=[],
+        show_row_index=False,
+        show_top_left=False,
+        show_x_scrollbar=True,
+        show_y_scrollbar=True,
+        table_wrap="w",
+        header_wrap="w",
+        align="center",
+        header_align="center",
+    )
+    results_sheet.grid(row=2, column=0, columnspan=6, sticky="nsew", padx=ROW_PADX, pady=8)
+    results_sheet.set_options(auto_resize_rows=220, table_wrap="w", header_wrap="w")
+    results_sheet.enable_bindings("all")
+    results_sheet.header_font(("Segoe UI", max(BODY_FONT_SIZE, 12), "bold"))
+    results_sheet.set_all_column_widths(default_column_width, redraw=False)
+    results_sheet.redraw()
 
     hidden_columns = set()
     column_visibility_vars = {}
+    current_rows = []
+    last_fitted_width = -1
+
+    def fit_columns_to_available_width(redraw=False):
+        visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
+        if not visible_indexes:
+            visible_indexes = list(range(len(columns)))
+
+        visible_count = len(visible_indexes)
+        if visible_count <= 0:
+            return False
+
+        available_width = max(
+            results_sheet.winfo_width(),
+            container.winfo_width() - (ROW_PADX * 2),
+        )
+        if available_width <= 20:
+            return False
+
+        # Use an exact width budget so visible columns fill the table width.
+        usable_width = max(visible_count * 60, int(available_width))
+        description_weight = 2.4
+        weights = [description_weight if columns[idx] == "Description" else 1.0 for idx in visible_indexes]
+
+        total_weight = sum(weights) if weights else 1.0
+        assigned_widths = [int(usable_width * (w / total_weight)) for w in weights]
+
+        # Guarantee the budget is fully used after integer rounding.
+        remainder = usable_width - sum(assigned_widths)
+        if assigned_widths:
+            assigned_widths[-1] += remainder
+
+        # Keep columns usable on narrow windows.
+        min_width = 60
+        deficit = 0
+        for i, w in enumerate(assigned_widths):
+            if w < min_width:
+                deficit += (min_width - w)
+                assigned_widths[i] = min_width
+
+        if deficit > 0 and assigned_widths:
+            flex_indexes = [i for i, idx in enumerate(visible_indexes) if columns[idx] != "Description"]
+            if not flex_indexes:
+                flex_indexes = list(range(len(assigned_widths) - 1))
+            for i in reversed(flex_indexes):
+                if deficit <= 0:
+                    break
+                reducible = max(0, assigned_widths[i] - min_width)
+                take = min(reducible, deficit)
+                assigned_widths[i] -= take
+                deficit -= take
+            if deficit > 0:
+                assigned_widths[-1] = max(min_width, assigned_widths[-1] - deficit)
+
+        for col_idx, width in zip(visible_indexes, assigned_widths):
+            results_sheet.column_width(col_idx, width, redraw=False)
+
+        if redraw:
+            results_sheet.redraw()
+        return True
+
+    def apply_display_columns():
+        if not hidden_columns:
+            results_sheet.display_columns(
+                columns="all",
+                all_columns_displayed=True,
+                reset_col_positions=False,
+                redraw=True,
+                deselect_all=False,
+            )
+            fit_columns_to_available_width(redraw=True)
+            return
+
+        visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
+        results_sheet.display_columns(
+            columns=visible_indexes,
+            all_columns_displayed=False,
+            reset_col_positions=False,
+            redraw=True,
+            deselect_all=False,
+        )
+        fit_columns_to_available_width(redraw=True)
+
+    def get_selected_row_index():
+        selected_rows = results_sheet.get_selected_rows(get_cells_as_rows=True)
+        if not selected_rows:
+            current = results_sheet.get_currently_selected()
+            if current and len(current) >= 1 and isinstance(current[0], int):
+                selected_rows = [current[0]]
+            else:
+                return None
+
+        normalized_rows = []
+        for selected in selected_rows:
+            if isinstance(selected, tuple) and selected:
+                normalized_rows.append(selected[0])
+            elif isinstance(selected, int):
+                normalized_rows.append(selected)
+
+        if not normalized_rows:
+            return None
+
+        row_index = min(normalized_rows)
+        if row_index < 0 or row_index >= len(current_rows):
+            return None
+        return row_index
 
     def hide_column(selected):
         if selected not in columns:
             return
 
         hidden_columns.add(selected)
-        results_tree.column(selected, width=0, minwidth=0, stretch=False)
+        apply_display_columns()
 
         var = column_visibility_vars.get(selected)
         if var is not None and var.get():
@@ -118,7 +215,7 @@ def build_search_tab(tab):
             return
 
         hidden_columns.discard(selected)
-        results_tree.column(selected, width=default_column_width, minwidth=20, stretch=True)
+        apply_display_columns()
 
         var = column_visibility_vars.get(selected)
         if var is not None and not var.get():
@@ -126,8 +223,7 @@ def build_search_tab(tab):
 
     def show_all_columns():
         hidden_columns.clear()
-        for col_name in columns:
-            results_tree.column(col_name, width=default_column_width, minwidth=20, stretch=True)
+        apply_display_columns()
 
         for col_name in columns:
             var = column_visibility_vars.get(col_name)
@@ -138,7 +234,8 @@ def build_search_tab(tab):
         hidden_columns.clear()
         for col_name in columns:
             hidden_columns.add(col_name)
-            results_tree.column(col_name, width=0, minwidth=0, stretch=False)
+
+        apply_display_columns()
 
         for col_name in columns:
             var = column_visibility_vars.get(col_name)
@@ -214,17 +311,21 @@ def build_search_tab(tab):
             font=body_font,
         ).grid(row=0, column=2, sticky="ew", padx=(6, 0))
 
-    header_menu = Menu(results_tree, tearoff=0)
+    header_menu = Menu(results_sheet, tearoff=0)
 
     def on_header_right_click(event):
-        if results_tree.identify_region(event.x, event.y) != "heading":
+        if results_sheet.identify_region(event) != "header":
             return
 
-        col_id = results_tree.identify_column(event.x)
-        if not col_id or col_id == "#0":
+        displayed_col_index = results_sheet.identify_column(event)
+        if displayed_col_index is None:
             return
 
-        col_index = int(col_id.replace("#", "")) - 1
+        try:
+            col_index = results_sheet.displayed_column_to_data(displayed_col_index)
+        except Exception:
+            return
+
         if col_index < 0 or col_index >= len(columns):
             return
 
@@ -249,11 +350,12 @@ def build_search_tab(tab):
     selected_actions.grid_remove()
 
     def _selected_row_values():
-        selected = results_tree.selection()
-        if not selected:
+        row_index = get_selected_row_index()
+        if row_index is None:
             return None
-        values = results_tree.item(selected[0], "values")
-        return list(values) if values else None
+
+        row = current_rows[row_index]
+        return [("" if row.get(col_name) is None else row.get(col_name)) for col_name in columns]
 
     def _set_selected_actions_visible(visible):
         if visible:
@@ -286,11 +388,37 @@ def build_search_tab(tab):
         _set_selected_actions_visible(True)
 
     def on_search():
+        nonlocal current_rows
         rows = search_rows(search_entry.get().strip(), search_by.get())
-        results_tree.delete(*results_tree.get_children())
+        current_rows = rows
+
+        data = []
         for row in rows:
-            values = [("" if row.get(c["name"]) is None else row.get(c["name"])) for c in COLUMNS]
-            results_tree.insert("", "end", values=values)
+            data.append([("" if row.get(c["name"]) is None else row.get(c["name"])) for c in COLUMNS])
+
+        results_sheet.headers(columns, redraw=False)
+        results_sheet.set_sheet_data(
+            data,
+            reset_col_positions=False,
+            reset_row_positions=True,
+            redraw=False,
+            keep_formatting=False,
+        )
+        # Defensive fallback: some tksheet states can show headers but skip body rows.
+        if data and results_sheet.total_rows() == 0:
+            results_sheet.set_sheet_data(
+                data,
+                reset_col_positions=True,
+                reset_row_positions=True,
+                redraw=False,
+                keep_formatting=False,
+            )
+        fit_columns_to_available_width(redraw=False)
+        results_sheet.row_height("all", "text", only_set_if_too_small=True, redraw=False)
+        apply_display_columns()
+        results_sheet.deselect("all", redraw=False)
+        results_sheet.redraw()
+        _update_selected_actions_ui()
 
     def refresh_with_feedback():
         if refresh_button is None:
@@ -310,8 +438,9 @@ def build_search_tab(tab):
         on_search()
 
     def upload_pdf_for_selected_row():
+        row_index = get_selected_row_index()
         values = _selected_row_values()
-        if not values or file_number_col_idx < 0:
+        if row_index is None or not values or file_number_col_idx < 0:
             messagebox.showwarning("Upload PDF", "Select a row first.")
             return
 
@@ -339,12 +468,10 @@ def build_search_tab(tab):
                 return
 
             refresh_after_recalc()
-            # Restore selection after refresh when possible.
-            for item_id in results_tree.get_children():
-                row_values = results_tree.item(item_id, "values")
-                if file_number_col_idx < len(row_values) and str(row_values[file_number_col_idx] or "").strip() == file_number:
-                    results_tree.selection_set(item_id)
-                    results_tree.focus(item_id)
+            for idx, row in enumerate(current_rows):
+                value = "" if row.get("File Number") is None else str(row.get("File Number")).strip()
+                if value == file_number:
+                    results_sheet.select_row(idx, redraw=True, run_binding_func=False)
                     break
             _update_selected_actions_ui()
         except Exception as exc:
@@ -364,20 +491,29 @@ def build_search_tab(tab):
             messagebox.showerror("Open Workbook", f"Could not open workbook:\n{exc}")
 
     def handle_cell_click(event):
-        item_id = results_tree.identify_row(event.y)
-        col_id = results_tree.identify_column(event.x)
-        if not item_id or not col_id:
+        if results_sheet.identify_region(event) != "table":
             return
 
-        col_index = int(col_id.replace("#", "")) - 1
+        row_index = results_sheet.identify_row(event, exclude_index=True)
+        displayed_col_index = results_sheet.identify_column(event, exclude_header=True)
+        if row_index is None or displayed_col_index is None:
+            return
+
+        try:
+            col_index = results_sheet.displayed_column_to_data(displayed_col_index)
+        except Exception:
+            return
+
         if col_index < 0 or col_index >= len(COLUMNS):
             return
 
         if COLUMNS[col_index]["name"] != "FileLink":
             return
 
-        values = results_tree.item(item_id, "values")
-        file_link = values[col_index] if col_index < len(values) else ""
+        if row_index < 0 or row_index >= len(current_rows):
+            return
+
+        file_link = current_rows[row_index].get("FileLink", "")
         if not file_link:
             return
 
@@ -386,9 +522,21 @@ def build_search_tab(tab):
         except Exception as exc:
             messagebox.showerror("Open File", f"Could not open file link:\n{exc}")
 
-    results_tree.bind("<Double-1>", handle_cell_click)
-    results_tree.bind("<Button-3>", on_header_right_click)
-    results_tree.bind("<<TreeviewSelect>>", lambda event: _update_selected_actions_ui())
+    results_sheet.bind("<Double-1>", handle_cell_click)
+    results_sheet.bind("<Button-3>", on_header_right_click)
+    results_sheet.bind("<ButtonRelease-1>", lambda event: _update_selected_actions_ui())
+    results_sheet.bind("<KeyRelease>", lambda event: _update_selected_actions_ui())
+
+    def on_sheet_configure(event):
+        nonlocal last_fitted_width
+        if event.width <= 20:
+            return
+        # Re-fit when table viewport width changes so columns always fill container width.
+        if abs(event.width - last_fitted_width) >= 3:
+            fit_columns_to_available_width(redraw=True)
+            last_fitted_width = event.width
+
+    results_sheet.bind("<Configure>", on_sheet_configure, add="+")
 
     on_search()
 
