@@ -79,6 +79,12 @@ _sheet_rows_cache = None
 _sheet_rows_cache_mtime = None
 
 
+def _invalidate_sheet_rows_cache():
+    global _sheet_rows_cache, _sheet_rows_cache_mtime
+    _sheet_rows_cache = None
+    _sheet_rows_cache_mtime = None
+
+
 def _get_cached_sheet_rows():
     """Return workbook rows for autofill, reloading only when the file changes.
 
@@ -192,6 +198,7 @@ def build_insert_tab(tab):
         rows_frame.grid_columnconfigure(1, weight=2)
         rows_frame.grid_columnconfigure(2, weight=1)
         rows_frame.grid_columnconfigure(3, weight=0)
+        rows_frame.grid_columnconfigure(4, weight=0)
 
         CTkLabel(rows_frame, text="Field Name", font=CTkFont(size=13, weight="bold")).grid(
             row=0, column=0, sticky="w", padx=8, pady=(8, 6)
@@ -202,10 +209,14 @@ def build_insert_tab(tab):
         CTkLabel(rows_frame, text="Required", font=CTkFont(size=13, weight="bold")).grid(
             row=0, column=2, sticky="w", padx=8, pady=(8, 6)
         )
+        CTkLabel(rows_frame, text="Drag", font=CTkFont(size=13, weight="bold")).grid(
+            row=0, column=3, sticky="w", padx=8, pady=(8, 6)
+        )
 
         row_models = []
         removed_rows_stack = []
         undo_button = None
+        drag_state = {"model": None}
 
         def _update_undo_button_state():
             if undo_button is None:
@@ -217,7 +228,47 @@ def build_insert_tab(tab):
                 row["name_entry"].grid(row=idx, column=0, sticky="ew", padx=8, pady=4)
                 row["type_combo"].grid(row=idx, column=1, sticky="ew", padx=8, pady=4)
                 row["required_check"].grid(row=idx, column=2, sticky="w", padx=8, pady=4)
-                row["remove_btn"].grid(row=idx, column=3, sticky="e", padx=8, pady=4)
+                row["drag_handle"].grid(row=idx, column=3, sticky="w", padx=8, pady=4)
+                row["remove_btn"].grid(row=idx, column=4, sticky="e", padx=8, pady=4)
+
+        def _move_row(model, target_index):
+            if model not in row_models:
+                return
+            current_index = row_models.index(model)
+            target_index = max(0, min(target_index, len(row_models) - 1))
+            if current_index == target_index:
+                return
+            row_models.pop(current_index)
+            row_models.insert(target_index, model)
+            _reflow_rows()
+
+        def _drag_target_index():
+            pointer_y = rows_frame.winfo_pointery()
+            for idx, row in enumerate(row_models):
+                center_y = row["name_entry"].winfo_rooty() + (row["name_entry"].winfo_height() // 2)
+                if pointer_y < center_y:
+                    return idx
+            return len(row_models) - 1
+
+        def _on_drag_start(event, model):
+            drag_state["model"] = model
+            handle = model.get("drag_handle")
+            if handle is not None:
+                handle.configure(fg_color="#2C8C67")
+
+        def _on_drag_motion(event):
+            model = drag_state.get("model")
+            if model is None:
+                return
+            _move_row(model, _drag_target_index())
+
+        def _on_drag_end(event):
+            model = drag_state.get("model")
+            if model is not None:
+                handle = model.get("drag_handle")
+                if handle is not None:
+                    handle.configure(fg_color="transparent")
+            drag_state["model"] = None
 
         def _remove_row(model):
             if len(row_models) <= 1:
@@ -236,6 +287,7 @@ def build_insert_tab(tab):
                 model["name_entry"],
                 model["type_combo"],
                 model["required_check"],
+                model["drag_handle"],
                 model["remove_btn"],
             ):
                 widget.destroy()
@@ -268,6 +320,14 @@ def build_insert_tab(tab):
             type_combo.set(initial_type if initial_type in field_types else "text")
 
             required_check = CTkCheckBox(rows_frame, text="", variable=required_var)
+            drag_handle = CTkLabel(
+                rows_frame,
+                text="::",
+                width=26,
+                corner_radius=6,
+                fg_color="transparent",
+                cursor="fleur",
+            )
 
             model = {
                 "original_name": initial.get("original_name", initial.get("name")),
@@ -275,8 +335,13 @@ def build_insert_tab(tab):
                 "type_combo": type_combo,
                 "required_var": required_var,
                 "required_check": required_check,
+                "drag_handle": drag_handle,
                 "remove_btn": None,
             }
+
+            drag_handle.bind("<ButtonPress-1>", lambda event, m=model: _on_drag_start(event, m))
+            drag_handle.bind("<B1-Motion>", _on_drag_motion)
+            drag_handle.bind("<ButtonRelease-1>", _on_drag_end)
 
             remove_btn = CTkButton(
                 rows_frame,
@@ -338,6 +403,15 @@ def build_insert_tab(tab):
                 messagebox.showerror("Customize Fields", "At least one field is required.")
                 return
 
+            has_item_code = any(col.get("name") == "ItemCode" for col in new_columns)
+            has_description = any(col.get("name") == "Description" for col in new_columns)
+            if has_description and not has_item_code:
+                messagebox.showerror(
+                    "Customize Fields",
+                    "Description requires ItemCode so the auto-formula can keep working.",
+                )
+                return
+
             try:
                 save_columns_config(new_columns)
             except Exception as exc:
@@ -361,6 +435,8 @@ def build_insert_tab(tab):
 
             COLUMNS.clear()
             COLUMNS.extend(new_columns)
+
+            _invalidate_sheet_rows_cache()
 
             SEARCH_BY.clear()
             SEARCH_BY.extend([col["name"] for col in new_columns])

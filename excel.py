@@ -294,6 +294,12 @@ _desc_index_cache: dict = {}
 _desc_index_mtime: float | None = None
 
 
+def _invalidate_desc_index_cache() -> None:
+    global _desc_index_cache, _desc_index_mtime
+    _desc_index_cache = {}
+    _desc_index_mtime = None
+
+
 def _get_desc_index(path: Path) -> dict:
     """Return a cached {ItemCode.upper(): description} dict for the given file.
 
@@ -324,7 +330,7 @@ def get_description_for_itemcode(item_code: str) -> str:
     return desc_index.get(str(item_code).strip().upper(), "") or ""
 
 
-def load_sheet():
+def load_sheet(_allow_recalc=True):
     """Return worksheet rows as list[dict], excluding the header row.
 
     Description is resolved from a Python-side lookup against CREXPD01 so
@@ -382,6 +388,22 @@ def load_sheet():
                 break
 
     wb.close()
+
+    # If a row has an ItemCode that exists in CREXPD01 but Description is still
+    # blank, force one Excel recalc/save pass and reload once.
+    if _allow_recalc and desc_index:
+        should_recalc = False
+        for row in rows:
+            item_code = str(row.get("ItemCode", "")).strip().upper()
+            description = str(row.get("Description", "") or "").strip()
+            if item_code and not description and item_code in desc_index:
+                should_recalc = True
+                break
+
+        if should_recalc:
+            _excel_recalc_and_save(path)
+            return load_sheet(_allow_recalc=False)
+
     return rows
 
 
@@ -442,13 +464,29 @@ def append_row(data: dict):
     # Phase 2 – ZIP surgery: rewrite only the Heat Number sheet XML
     new_row_idx = last_data_row + 1
 
-    row_values = [data.get(col["name"], "") for col in COLUMNS]
+    # Build row values against the actual worksheet header order so formula
+    # references remain correct even after drag-and-drop field reordering.
+    effective_columns = [col["name"] for col in COLUMNS]
+    try:
+        wb_headers = load_workbook(file_path, read_only=True, data_only=True)
+        ws_headers = _get_form_sheet_for_read(wb_headers)
+        if ws_headers is not None:
+            header_row = next(ws_headers.iter_rows(min_row=1, max_row=1, values_only=True), None)
+            if header_row:
+                header_names = [str(v).strip() for v in header_row if v not in (None, "")]
+                if header_names:
+                    effective_columns = header_names
+        wb_headers.close()
+    except Exception:
+        pass
+
+    row_values = [data.get(name, "") for name in effective_columns]
 
     desc_col_idx = next(
-        (i for i, c in enumerate(COLUMNS) if c["name"] == "Description"), None
+        (i for i, name in enumerate(effective_columns) if name == "Description"), None
     )
     item_code_col_idx = next(
-        (i for i, c in enumerate(COLUMNS) if c["name"] == "ItemCode"), None
+        (i for i, name in enumerate(effective_columns) if name == "ItemCode"), None
     )
 
     cached_values = {}
@@ -521,13 +559,37 @@ def sync_form_sheet_columns(old_columns, new_columns):
     ws_form.delete_rows(1, ws_form.max_row)
     ws_form.append(new_names)
 
+    desc_col_idx_1based = None
+    item_code_col_idx_1based = None
+    if "Description" in new_names:
+        desc_col_idx_1based = new_names.index("Description") + 1
+    if "ItemCode" in new_names:
+        item_code_col_idx_1based = new_names.index("ItemCode") + 1
+
     for row_dict in existing_row_dicts:
         ws_form.append([row_dict.get(name, "") for name in new_names])
+
+        # Ensure existing rows keep a correct Description formula after column
+        # reordering. This prevents stale references to old ItemCode columns.
+        if desc_col_idx_1based is not None and item_code_col_idx_1based is not None:
+            row_num = ws_form.max_row
+            item_code_cell_ref = f"{_col_idx_to_letter(item_code_col_idx_1based - 1)}{row_num}"
+            ws_form.cell(
+                row=row_num,
+                column=desc_col_idx_1based,
+                value=build_description_formula(item_code_cell_ref, "CREXPD01"),
+            )
 
     try:
         wb.save(file_path)
     finally:
         wb.close()
+
+    # Schema sync can change formulas/references; reset in-memory indexes and
+    # trigger one recalc pass so Insert/Search resolve descriptions immediately.
+    _invalidate_desc_index_cache()
+    _excel_recalc_and_save(file_path)
+    _invalidate_desc_index_cache()
 
 
 def search_rows(search_value, search_column="ItemCode"):
