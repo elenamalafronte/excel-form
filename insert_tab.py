@@ -7,6 +7,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 import config as cfg
+from secrets import CUSTOMIZE_FIELDS_PASSWORD
 
 from customtkinter import (
     CTkButton,
@@ -356,6 +357,52 @@ def build_insert_tab(tab):
             width=100,
             command=_save_workbook_settings,
         ).pack(side="right", padx=(0, 8))
+
+    def _check_customize_password():
+        """Check password before allowing access to customize fields."""
+        pwd_dialog = CTkToplevel(tab)
+        pwd_dialog.title("Password Required")
+        pwd_dialog.geometry("320x140")
+        pwd_dialog.transient(tab.winfo_toplevel())
+        pwd_dialog.grab_set()
+        pwd_dialog.resizable(False, False)
+
+        CTkLabel(pwd_dialog, text="Enter password to customize fields:", font=CTkFont(size=12)).pack(
+            anchor="w", padx=12, pady=(12, 8)
+        )
+
+        pwd_entry = CTkEntry(pwd_dialog, show="*", width=280, height=32)
+        pwd_entry.pack(padx=12, pady=(0, 12))
+        pwd_entry.focus()
+
+        def verify_password():
+            if pwd_entry.get() == CUSTOMIZE_FIELDS_PASSWORD:
+                pwd_dialog.destroy()
+                _open_fields_customizer()
+            else:
+                messagebox.showerror("Password Incorrect", "The password you entered is incorrect.")
+                pwd_entry.delete(0, "end")
+                pwd_entry.focus()
+
+        def on_enter_key(event):
+            verify_password()
+
+        pwd_entry.bind("<Return>", on_enter_key)
+
+        btn_frame = CTkFrame(pwd_dialog, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=12, pady=(0, 12))
+        CTkButton(btn_frame, text="Cancel", width=80, command=pwd_dialog.destroy).pack(side="right", padx=(4, 0))
+        CTkButton(btn_frame, text="OK", width=80, command=verify_password).pack(side="right")
+
+        # Center the dialog on screen
+        pwd_dialog.update_idletasks()
+        screen_width = pwd_dialog.winfo_screenwidth()
+        screen_height = pwd_dialog.winfo_screenheight()
+        dialog_width = pwd_dialog.winfo_width()
+        dialog_height = pwd_dialog.winfo_height()
+        x = (screen_width - dialog_width) // 2
+        y = (screen_height - dialog_height) // 2
+        pwd_dialog.geometry(f"+{x}+{y}")
 
     def _open_fields_customizer():
         panel = CTkToplevel(tab)
@@ -715,7 +762,7 @@ def build_insert_tab(tab):
         height=BUTTON_HEIGHT,
         corner_radius=BUTTON_CORNER_RADIUS,
         font=body_font,
-        command=_open_fields_customizer,
+        command=_check_customize_password,
     ).grid(row=0, column=1, sticky="e")
     CTkButton(
         header_row,

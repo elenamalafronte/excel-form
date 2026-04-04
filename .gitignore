@@ -12,6 +12,9 @@ env/
 # Editor settings
 .vscode/
 
+# Secrets and credentials
+secrets.py
+
 # Generated workbook and Excel temp files
 Heat number summary.xlsm
 Heat number summary.xlsx
