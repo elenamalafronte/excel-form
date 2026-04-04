@@ -747,9 +747,14 @@ def build_insert_tab(tab):
         for col in COLUMNS:
             # Skip auto-filled fields. They are managed separately and should not
             # be cleared here unless you explicitly want to reset them after save.
-            if col["name"] in ("File Number", "Description"):
+            if col["name"] == "File Number":
                 continue
-            fields[col["name"]].delete(0, "end")
+            if col["name"] == "Description":
+                fields[col["name"]].configure(state="normal")
+                fields[col["name"]].delete("1.0", "end")
+                fields[col["name"]].configure(state="disabled")
+            else:
+                fields[col["name"]].delete(0, "end")
 
         refresh_search = getattr(tab, "refresh_search", None)
         if callable(refresh_search):
