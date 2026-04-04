@@ -18,6 +18,12 @@ def build_app():
 	tab_insert = tabview.add("Insert")
 	tab_search = tabview.add("Search")
 
+	def remount_search_tab():
+		for child in tab_search.winfo_children():
+			child.destroy()
+		build_search_tab(tab_search)
+		tab_insert.refresh_search = getattr(tab_search, "refresh_search", None)
+
 	# Increase tab button size for better click targets and readability.
 	segmented_button = getattr(tabview, "_segmented_button", None)
 	if segmented_button is not None:
@@ -31,8 +37,8 @@ def build_app():
 			button.configure(width=130, corner_radius=18)
 
 	build_insert_tab(tab_insert)
-	build_search_tab(tab_search)
-	tab_insert.refresh_search = getattr(tab_search, "refresh_search", None)
+	remount_search_tab()
+	tab_insert.rebuild_search = remount_search_tab
 
 	last_tab = {"name": None}
 
