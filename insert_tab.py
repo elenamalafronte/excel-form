@@ -1,6 +1,7 @@
 import time
 import threading
 from tkinter import BooleanVar, filedialog, messagebox
+from tkinter import font as tkfont
 from pathlib import Path
 
 from customtkinter import (
@@ -171,6 +172,7 @@ def _update_description_field(description_widget, item_code_widget):
         description_widget.configure(state="normal")
         description_widget.delete("1.0", "end")
         description_widget.configure(state="disabled")
+        _autosize_description_widget(description_widget)
         return
 
     rows = _get_cached_sheet_rows()
@@ -180,6 +182,31 @@ def _update_description_field(description_widget, item_code_widget):
     description_widget.delete("1.0", "end")
     description_widget.insert("1.0", description)
     description_widget.configure(state="disabled")
+    _autosize_description_widget(description_widget)
+
+
+def _autosize_description_widget(description_widget, min_height=TEXTBOX_HEIGHT + 10):
+    """Grow the description textbox only when wrapped text would overflow.
+
+    Keeps a stable baseline height and expands to fit the number of displayed
+    wrapped lines currently needed by the text widget.
+    """
+    try:
+        description_widget.update_idletasks()
+        display_lines = description_widget.count("1.0", "end-1c", "displaylines")
+        line_count = int(display_lines[0]) if display_lines else 1
+    except Exception:
+        line_count = 1
+
+    try:
+        body_font = tkfont.Font(font=description_widget.cget("font"))
+        line_height = max(1, int(body_font.metrics("linespace")))
+    except Exception:
+        line_height = 18
+
+    # Include internal text widget padding/border so the last line is visible.
+    target_height = max(min_height, (line_count * line_height) + 14)
+    description_widget.configure(height=target_height)
 
 
 def _bind_itemcode_autofill(item_code_widget, description_widget):
@@ -626,6 +653,7 @@ def build_insert_tab(tab):
             )
             widget.configure(state="disabled")
             widget.grid(row=row_idx, column=1, sticky="ew", padx=ROW_PADX, pady=ROW_PADY)
+            widget.bind("<Configure>", lambda event, w=widget: _autosize_description_widget(w), add="+")
             description_widget = widget
         elif col["name"] == "ItemCode":
             widget = CTkEntry(
@@ -670,6 +698,7 @@ def build_insert_tab(tab):
 
     if item_code_widget is not None and description_widget is not None:
         _bind_itemcode_autofill(item_code_widget, description_widget)
+        _autosize_description_widget(description_widget)
 
     # keep a reference so the thread callback can re-enable it
     save_button = CTkButton(
@@ -753,6 +782,7 @@ def build_insert_tab(tab):
                 fields[col["name"]].configure(state="normal")
                 fields[col["name"]].delete("1.0", "end")
                 fields[col["name"]].configure(state="disabled")
+                _autosize_description_widget(fields[col["name"]])
             else:
                 fields[col["name"]].delete(0, "end")
 
