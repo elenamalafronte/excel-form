@@ -3,7 +3,9 @@ import ast
 import pprint
 from pathlib import Path
 
-EXCEL_FILE = "Heat number summary.xlsx"
+EXCEL_FILE = 'C:\\Users\\Elena Malafronte\\Downloads\\hobby\\website projects\\excel-form\\test.xlsx'
+SOURCE_SHEET_NAME = 'test1'
+FORM_SHEET_NAME = 'sheet2'
 
 # Workbook layout:
 # 1) first sheet = raw data, read-only
@@ -15,28 +17,15 @@ COLUMNS = [{'name': 'File Number',
   'required': True,
   'unique': True,
   'validate': 'is_valid_fileNumber'},
- {'name': 'Manufacturer/Supplier',
-  'type': 'text',
-  'required': False,
-  'unique': False,
-  'validate': None},
  {'name': 'ItemCode', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
  {'name': 'Description', 'type': 'general', 'required': False, 'validate': None},
- {'name': 'ManufacturerTestReport(MTR)No',
+ {'name': 'QualityControlManufactDossier(QCMD)',
   'type': 'text',
   'required': False,
   'unique': False,
   'validate': None},
- {'name': 'HeatNumber', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
- {'name': 'PackiglistNo', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
- {'name': 'ShippingNotice', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
- {'name': 'QualityControlManufactDossier(QCMD)',
-  'type': 'text',
-  'required': True,
-  'unique': False,
-  'validate': None},
- {'name': 'Rev', 'type': 'general', 'required': True, 'unique': False, 'validate': None},
- {'name': 'PAGENr', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
+ {'name': 'Rev', 'type': 'general', 'required': False, 'unique': False, 'validate': None},
+ {'name': 'PAGENr', 'type': 'text', 'required': False, 'unique': False, 'validate': None},
  {'name': 'FileLink', 'type': 'filelink', 'required': False, 'validate': None},
  {'name': 'Qt_Test', 'type': 'text', 'required': False}]
 
@@ -72,6 +61,53 @@ def save_columns_config(new_columns, config_file_path=None):
     replacement = f"COLUMNS = {formatted_columns}\n"
 
     updated_source = "".join(lines[:start_idx]) + replacement + "".join(lines[end_idx:])
+    target_path.write_text(updated_source, encoding="utf-8")
+
+
+def _replace_constant_assignment(source, constant_name, new_value):
+    module = ast.parse(source)
+    target_node = None
+
+    for node in module.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id == constant_name:
+                target_node = node
+                break
+
+    if target_node is None:
+        raise ValueError(f"Could not find {constant_name} assignment in config.py")
+
+    lines = source.splitlines(keepends=True)
+    start_idx = target_node.lineno - 1
+    end_idx = target_node.end_lineno
+
+    replacement = f"{constant_name} = {new_value!r}\n"
+    return "".join(lines[:start_idx]) + replacement + "".join(lines[end_idx:])
+
+
+def save_workbook_settings(excel_file=None, source_sheet_name=None, form_sheet_name=None, config_file_path=None):
+    """Persist workbook path and sheet names into config.py.
+
+    Updates the module globals too so the running app can use the new values
+    immediately without a restart.
+    """
+    target_path = Path(config_file_path) if config_file_path else Path(__file__)
+    source = target_path.read_text(encoding="utf-8")
+
+    updates = {}
+    if excel_file is not None:
+        updates["EXCEL_FILE"] = str(excel_file)
+    if source_sheet_name is not None:
+        updates["SOURCE_SHEET_NAME"] = str(source_sheet_name)
+    if form_sheet_name is not None:
+        updates["FORM_SHEET_NAME"] = str(form_sheet_name)
+
+    updated_source = source
+    for constant_name, value in updates.items():
+        updated_source = _replace_constant_assignment(updated_source, constant_name, value)
+        globals()[constant_name] = value
+
     target_path.write_text(updated_source, encoding="utf-8")
 
 SEARCH_BY = [col["name"] for col in COLUMNS]  # should be able to search by any column

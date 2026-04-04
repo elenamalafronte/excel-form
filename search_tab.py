@@ -2,6 +2,8 @@ import os
 from tkinter import BooleanVar, Menu, filedialog, messagebox
 from tkinter import font as tkfont
 
+import config as cfg
+
 from customtkinter import (
     CTkButton,
     CTkCheckBox,
@@ -15,7 +17,7 @@ from customtkinter import (
 )
 from tksheet import Sheet
 
-from config import COLUMNS, EXCEL_FILE, SEARCH_BY
+from config import COLUMNS, SEARCH_BY
 from excel import recalc_workbook, search_rows, update_file_link
 from ui_style import (
     BODY_FONT_SIZE,
@@ -610,7 +612,7 @@ def build_search_tab(tab):
 
     def open_workbook():
         try:
-            os.startfile(EXCEL_FILE)
+            os.startfile(cfg.EXCEL_FILE)
         except Exception as exc:
             messagebox.showerror("Open Workbook", f"Could not open workbook:\n{exc}")
 

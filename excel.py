@@ -6,17 +6,18 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
+import config as cfg
+
 from config import (
     COLUMNS,
     build_description_formula,
-    EXCEL_FILE,
     FILE_NUMBER_PATTERN,
     SEARCH_BY,
 )
 
 
 def _open_workbook():
-    path = Path(EXCEL_FILE)
+    path = Path(cfg.EXCEL_FILE)
     if path.exists():
         return load_workbook(path, keep_vba=path.suffix.lower() == ".xlsm")
     return Workbook()
@@ -26,28 +27,28 @@ def _get_layout_sheets(wb):
     ws_source = None
     ws_form = None
 
-    if "CREXPD01" in wb.sheetnames:
-        ws_source = wb["CREXPD01"]
+    if cfg.SOURCE_SHEET_NAME in wb.sheetnames:
+        ws_source = wb[cfg.SOURCE_SHEET_NAME]
     elif len(wb.worksheets) > 0:
         ws_source = wb.worksheets[0]
 
-    if "Heat Number" in wb.sheetnames:
-        ws_form = wb["Heat Number"]
+    if cfg.FORM_SHEET_NAME in wb.sheetnames:
+        ws_form = wb[cfg.FORM_SHEET_NAME]
     elif len(wb.worksheets) > 1:
         ws_form = wb.worksheets[1]
 
     if ws_source is None:
         ws_source = wb.active
-        ws_source.title = "CREXPD01"
+        ws_source.title = cfg.SOURCE_SHEET_NAME
     if ws_form is None:
-        ws_form = wb.create_sheet(title="Heat Number")
+        ws_form = wb.create_sheet(title=cfg.FORM_SHEET_NAME)
 
     return ws_source, ws_form
 
 
 def _get_form_sheet_for_read(wb):
-    if "Heat Number" in wb.sheetnames:
-        return wb["Heat Number"]
+    if cfg.FORM_SHEET_NAME in wb.sheetnames:
+        return wb[cfg.FORM_SHEET_NAME]
     if len(wb.worksheets) < 2:
         return None
     return wb.worksheets[1]
@@ -152,7 +153,7 @@ def _zip_append_row(file_path, row_values, new_row_idx, cached_values=None):
     This eliminates the save latency that came from openpyxl re-serializing
     15 000+ rows of source data on every insert.
     """
-    sheet_zip_path = _find_sheet_zip_path(file_path, "Heat Number")
+    sheet_zip_path = _find_sheet_zip_path(file_path, cfg.FORM_SHEET_NAME)
     new_row_xml = _build_row_xml(new_row_idx, row_values, cached_values)
 
     with zipfile.ZipFile(file_path, "r") as z:
@@ -212,7 +213,7 @@ def _build_description_index(file_path: Path) -> dict:
     for shared-string cells when the string table hasn't been fully loaded.
     """
     try:
-        crexpd01_zip_path = _find_sheet_zip_path(file_path, "CREXPD01")
+        crexpd01_zip_path = _find_sheet_zip_path(file_path, cfg.SOURCE_SHEET_NAME)
     except (ValueError, KeyError):
         return {}
 
@@ -297,8 +298,8 @@ def _build_description_index_fallback(file_path: Path) -> dict:
     """Fallback description index builder using openpyxl row values."""
     try:
         wb = load_workbook(file_path, read_only=True, data_only=True)
-        if "CREXPD01" in wb.sheetnames:
-            ws = wb["CREXPD01"]
+        if cfg.SOURCE_SHEET_NAME in wb.sheetnames:
+            ws = wb[cfg.SOURCE_SHEET_NAME]
         elif wb.worksheets:
             ws = wb.worksheets[0]
         else:
@@ -380,7 +381,7 @@ def _get_desc_index(path: Path) -> dict:
 
 def get_description_for_itemcode(item_code: str) -> str:
     """Return description for an ItemCode from CREXPD01 index, if available."""
-    path = Path(EXCEL_FILE)
+    path = Path(cfg.EXCEL_FILE)
     if not path.exists() or not item_code:
         return ""
 
@@ -399,7 +400,7 @@ def load_sheet(_allow_recalc=True):
     Excel has recalculated and cached the formula result.  The index is built
     once and cached by file mtime, so repeated searches are instant.
     """
-    path = Path(EXCEL_FILE)
+    path = Path(cfg.EXCEL_FILE)
     if not path.exists():
         return []
 
@@ -495,7 +496,7 @@ def _excel_recalc_and_save(file_path: Path) -> None:
 
 def recalc_workbook() -> None:
     """Force Excel recalculation/save for the configured workbook."""
-    file_path = Path(EXCEL_FILE)
+    file_path = Path(cfg.EXCEL_FILE)
     if not file_path.exists():
         return
     _excel_recalc_and_save(file_path)
@@ -509,77 +510,57 @@ def append_row(data: dict):
     Phase 2 — rewrite only the Heat Number worksheet XML inside the ZIP,
                leaving CREXPD01 untouched (never parsed, never serialized).
     """
-    file_path = Path(EXCEL_FILE)
+    file_path = Path(cfg.EXCEL_FILE)
     if not file_path.exists():
-        raise FileNotFoundError(f"Workbook not found: {EXCEL_FILE}")
-
-    # Phase 1 – find true last data row (Heat Number sheet only).
-    last_data_row = 1
-    desc_index = {}
+        raise FileNotFoundError(f"Workbook not found: {cfg.EXCEL_FILE}")
     try:
-        wb_ro = load_workbook(file_path, read_only=True, data_only=True)
-        ws_ro = _get_form_sheet_for_read(wb_ro)
-        if ws_ro is not None:
-            for row in ws_ro.iter_rows(min_row=2):
-                if any(cell.value is not None for cell in row):
-                    last_data_row = row[0].row
-        wb_ro.close()
-    except Exception:
-        pass
+        wb = load_workbook(file_path)
+        ws_form = _get_layout_sheets(wb)[1]
 
-    # Build description index once for this append. This allows writing a
-    # cached formula result so Search can display Description immediately.
-    desc_index = _get_desc_index(file_path)
+        headers = []
+        for col_idx in range(1, ws_form.max_column + 1):
+            value = ws_form.cell(row=1, column=col_idx).value
+            headers.append(str(value).strip() if value is not None else "")
 
-    # Phase 2 – ZIP surgery: rewrite only the Heat Number sheet XML
-    new_row_idx = last_data_row + 1
+        if not headers:
+            headers = [col["name"] for col in COLUMNS]
 
-    # Build row values against the actual worksheet header order so formula
-    # references remain correct even after drag-and-drop field reordering.
-    effective_columns = [col["name"] for col in COLUMNS]
-    try:
-        wb_headers = load_workbook(file_path, read_only=True, data_only=True)
-        ws_headers = _get_form_sheet_for_read(wb_headers)
-        if ws_headers is not None:
-            header_row = next(ws_headers.iter_rows(min_row=1, max_row=1, values_only=True), None)
-            if header_row:
-                header_names = [str(v).strip() for v in header_row if v not in (None, "")]
-                if header_names:
-                    effective_columns = header_names
-        wb_headers.close()
-    except Exception:
-        pass
+        # Find the last non-empty row by scanning upward so empty formatted rows
+        # at the end do not cause gaps in the inserted data.
+        last_data_row = 1
+        for row_idx in range(ws_form.max_row, 1, -1):
+            if any(ws_form.cell(row=row_idx, column=col_idx).value not in (None, "") for col_idx in range(1, ws_form.max_column + 1)):
+                last_data_row = row_idx
+                break
 
-    row_values = [data.get(name, "") for name in effective_columns]
+        new_row_idx = last_data_row + 1
 
-    desc_col_idx = next(
-        (i for i, name in enumerate(effective_columns) if name == "Description"), None
-    )
-    item_code_col_idx = next(
-        (i for i, name in enumerate(effective_columns) if name == "ItemCode"), None
-    )
+        row_values = [data.get(name, "") for name in headers]
+        desc_col_idx = next((i for i, name in enumerate(headers) if name == "Description"), None)
+        item_code_col_idx = next((i for i, name in enumerate(headers) if name == "ItemCode"), None)
 
-    cached_values = {}
-    if desc_col_idx is not None and item_code_col_idx is not None:
-        item_code_col_letter = _col_idx_to_letter(item_code_col_idx)
-        row_values[desc_col_idx] = build_description_formula(
-            f"{item_code_col_letter}{new_row_idx}", "CREXPD01"
-        )
+        if desc_col_idx is not None and item_code_col_idx is not None:
+            item_code_col_letter = _col_idx_to_letter(item_code_col_idx)
+            row_values[desc_col_idx] = build_description_formula(
+                f"{item_code_col_letter}{new_row_idx}", cfg.SOURCE_SHEET_NAME
+            )
 
-        item_code = str(data.get("ItemCode", "")).strip().upper()
-        if item_code and desc_index:
-            description = desc_index.get(item_code, "")
-            if description:
-                cached_values[desc_col_idx] = description
+        for col_idx, value in enumerate(row_values, start=1):
+            cell = ws_form.cell(row=new_row_idx, column=col_idx)
+            cell.value = value
 
-    try:
-        _zip_append_row(file_path, row_values, new_row_idx, cached_values)
+            if headers[col_idx - 1] == "FileLink" and value:
+                cell.hyperlink = value
+                cell.style = "Hyperlink"
+
+        wb.save(file_path)
+        wb.close()
     except PermissionError as exc:
         raise PermissionError(
-            f"Cannot save workbook. Close '{EXCEL_FILE}' in Excel and try again."
+            f"Cannot save workbook. Close '{cfg.EXCEL_FILE}' in Excel and try again."
         ) from exc
 
-    _excel_recalc_and_save(file_path)
+    _invalidate_desc_index_cache()
 
 
 def sync_form_sheet_columns(old_columns, new_columns):
@@ -589,7 +570,7 @@ def sync_form_sheet_columns(old_columns, new_columns):
     Columns removed from config are removed from the sheet.
     Newly added columns are created with blank values for existing rows.
     """
-    file_path = Path(EXCEL_FILE)
+    file_path = Path(cfg.EXCEL_FILE)
 
     wb = _open_workbook()
     _, ws_form = _get_layout_sheets(wb)
@@ -647,7 +628,7 @@ def sync_form_sheet_columns(old_columns, new_columns):
             ws_form.cell(
                 row=row_num,
                 column=desc_col_idx_1based,
-                value=build_description_formula(item_code_cell_ref, "CREXPD01"),
+                value=build_description_formula(item_code_cell_ref, cfg.SOURCE_SHEET_NAME),
             )
 
     try:
@@ -670,9 +651,9 @@ def update_file_link(file_number: str, file_link: str) -> bool:
     if not file_number:
         return False
 
-    file_path = Path(EXCEL_FILE)
+    file_path = Path(cfg.EXCEL_FILE)
     if not file_path.exists():
-        raise FileNotFoundError(f"Workbook not found: {EXCEL_FILE}")
+        raise FileNotFoundError(f"Workbook not found: {cfg.EXCEL_FILE}")
 
     wb = _open_workbook()
     try:

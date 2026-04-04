@@ -1,8 +1,12 @@
 import time
 import threading
-from tkinter import BooleanVar, filedialog, messagebox
+from tkinter import BooleanVar, StringVar, filedialog, messagebox
 from tkinter import font as tkfont
 from pathlib import Path
+
+from openpyxl import load_workbook
+
+import config as cfg
 
 from customtkinter import (
     CTkButton,
@@ -19,13 +23,19 @@ from customtkinter import (
 
 from config import (
     COLUMNS,
-    EXCEL_FILE,
     SEARCH_BY,
     get_next_fileNumber,
     get_next_fileNumber_from_value,
     save_columns_config,
+    save_workbook_settings,
 )
-from excel import append_row, get_description_for_itemcode, load_sheet, sync_form_sheet_columns
+from excel import (
+    _invalidate_desc_index_cache,
+    append_row,
+    get_description_for_itemcode,
+    load_sheet,
+    sync_form_sheet_columns,
+)
 from ui_style import (
     BODY_FONT_SIZE,
     BUTTON_CORNER_RADIUS,
@@ -121,7 +131,7 @@ def _get_cached_sheet_rows():
     """
     global _sheet_rows_cache, _sheet_rows_cache_mtime
 
-    workbook_path = Path(EXCEL_FILE)
+    workbook_path = Path(cfg.EXCEL_FILE)
     if not workbook_path.exists():
         _sheet_rows_cache = []
         _sheet_rows_cache_mtime = None
@@ -223,6 +233,30 @@ def _bind_itemcode_autofill(item_code_widget, description_widget):
     return _on_itemcode_event
 
 
+def _validate_workbook_settings(excel_file, source_sheet_name, form_sheet_name):
+    workbook_path = Path(excel_file).expanduser()
+    if not workbook_path.exists():
+        return False, f"Workbook not found: {workbook_path}"
+
+    try:
+        wb = load_workbook(workbook_path, read_only=True)
+        sheetnames = list(wb.sheetnames)
+        wb.close()
+    except Exception as exc:
+        return False, f"Could not open workbook:\n{exc}"
+
+    missing = []
+    if source_sheet_name not in sheetnames:
+        missing.append(f"source sheet '{source_sheet_name}'")
+    if form_sheet_name not in sheetnames:
+        missing.append(f"form sheet '{form_sheet_name}'")
+
+    if missing:
+        return False, "Workbook is missing: " + ", ".join(missing)
+
+    return True, ""
+
+
 def build_insert_tab(tab):
     label_font = CTkFont(size=LABEL_FONT_SIZE)
     body_font = CTkFont(size=BODY_FONT_SIZE)
@@ -234,6 +268,93 @@ def build_insert_tab(tab):
         for child in tab.winfo_children():
             child.destroy()
         build_insert_tab(tab)
+
+    def _open_workbook_settings():
+        panel = CTkToplevel(tab)
+        panel.title("Workbook Settings")
+        panel.geometry("680x260")
+        panel.transient(tab.winfo_toplevel())
+        panel.grab_set()
+
+        CTkLabel(panel, text="Workbook Settings", font=CTkFont(size=18, weight="bold")).pack(
+            anchor="w", padx=12, pady=(12, 8)
+        )
+
+        form = CTkFrame(panel, fg_color="transparent")
+        form.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        form.grid_columnconfigure(1, weight=1)
+
+        workbook_var = StringVar(value=cfg.EXCEL_FILE)
+        source_sheet_var = StringVar(value=cfg.SOURCE_SHEET_NAME)
+        form_sheet_var = StringVar(value=cfg.FORM_SHEET_NAME)
+
+        def _browse_workbook():
+            selected = filedialog.askopenfilename(
+                title="Select Workbook",
+                filetypes=[("Excel files", "*.xlsx *.xlsm"), ("All files", "*.*")],
+            )
+            if selected:
+                workbook_var.set(selected)
+
+        def _save_workbook_settings():
+            workbook_path = workbook_var.get().strip()
+            source_sheet_name = source_sheet_var.get().strip()
+            form_sheet_name = form_sheet_var.get().strip()
+
+            if not workbook_path:
+                messagebox.showerror("Workbook Settings", "Workbook file is required.")
+                return
+            if not source_sheet_name:
+                messagebox.showerror("Workbook Settings", "Source sheet name is required.")
+                return
+            if not form_sheet_name:
+                messagebox.showerror("Workbook Settings", "Form sheet name is required.")
+                return
+
+            is_valid, message = _validate_workbook_settings(workbook_path, source_sheet_name, form_sheet_name)
+            if not is_valid:
+                messagebox.showerror("Workbook Settings", message)
+                return
+
+            try:
+                save_workbook_settings(
+                    excel_file=str(Path(workbook_path).expanduser().resolve()),
+                    source_sheet_name=source_sheet_name,
+                    form_sheet_name=form_sheet_name,
+                )
+            except Exception as exc:
+                messagebox.showerror("Workbook Settings", f"Could not save workbook settings:\n{exc}")
+                return
+
+            _invalidate_sheet_rows_cache()
+            _invalidate_desc_index_cache()
+
+            panel.destroy()
+            _rebuild_insert_tab()
+            messagebox.showinfo("Workbook Settings", "Workbook settings saved and applied.")
+
+        CTkLabel(form, text="Workbook File", font=label_font).grid(row=0, column=0, sticky="w", padx=(0, 10), pady=8)
+        workbook_entry = CTkEntry(form, font=body_font, textvariable=workbook_var)
+        workbook_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=8)
+        CTkButton(form, text="Browse", width=90, command=_browse_workbook).grid(row=0, column=2, sticky="e", pady=8)
+
+        CTkLabel(form, text="Source Sheet", font=label_font).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=8)
+        source_entry = CTkEntry(form, font=body_font, textvariable=source_sheet_var)
+        source_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=8)
+
+        CTkLabel(form, text="Form Sheet", font=label_font).grid(row=2, column=0, sticky="w", padx=(0, 10), pady=8)
+        form_entry = CTkEntry(form, font=body_font, textvariable=form_sheet_var)
+        form_entry.grid(row=2, column=1, columnspan=2, sticky="ew", pady=8)
+
+        footer = CTkFrame(panel, fg_color="transparent")
+        footer.pack(fill="x", padx=12, pady=(0, 12))
+        CTkButton(footer, text="Cancel", width=100, command=panel.destroy).pack(side="right")
+        CTkButton(
+            footer,
+            text="Save",
+            width=100,
+            command=_save_workbook_settings,
+        ).pack(side="right", padx=(0, 8))
 
     def _open_fields_customizer():
         panel = CTkToplevel(tab)
@@ -579,6 +700,8 @@ def build_insert_tab(tab):
     header_row = CTkFrame(container, fg_color="transparent")
     header_row.grid(row=0, column=0, columnspan=3, sticky="ew", padx=ROW_PADX, pady=(10, 6))
     header_row.grid_columnconfigure(0, weight=1)
+    header_row.grid_columnconfigure(1, weight=0)
+    header_row.grid_columnconfigure(2, weight=0)
 
     CTkLabel(header_row, text="Insert Material Record", font=title_font).grid(
         row=0,
@@ -593,6 +716,14 @@ def build_insert_tab(tab):
         font=body_font,
         command=_open_fields_customizer,
     ).grid(row=0, column=1, sticky="e")
+    CTkButton(
+        header_row,
+        text="Workbook Settings",
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+        command=_open_workbook_settings,
+    ).grid(row=0, column=2, sticky="e", padx=(8, 0))
 
     next_file_number_state = {"value": None}
 
