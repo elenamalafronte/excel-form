@@ -1,30 +1,12 @@
 import time
 import threading
-from tkinter import BooleanVar, filedialog, messagebox
+from tkinter import filedialog, messagebox
 from pathlib import Path
 
-from customtkinter import (
-    CTkButton,
-    CTkCheckBox,
-    CTkComboBox,
-    CTkEntry,
-    CTkFont,
-    CTkFrame,
-    CTkLabel,
-    CTkScrollableFrame,
-    CTkTextbox,
-    CTkToplevel,
-)
+from customtkinter import CTkButton, CTkEntry, CTkFont, CTkFrame, CTkLabel, CTkTextbox, CTkScrollableFrame
 
-from config import (
-    COLUMNS,
-    EXCEL_FILE,
-    SEARCH_BY,
-    get_next_fileNumber,
-    get_next_fileNumber_from_value,
-    save_columns_config,
-)
-from excel import append_row, load_sheet, sync_form_sheet_columns
+from config import COLUMNS, EXCEL_FILE, get_next_fileNumber, get_next_fileNumber_from_value
+from excel import append_row, load_sheet
 from ui_style import (
     BODY_FONT_SIZE,
     BUTTON_CORNER_RADIUS,
@@ -45,6 +27,8 @@ from ui_style import (
 
 # TODO: make font in table in search tab bigger (now too small)
 # TODO: add dragger/something where you yourself can customise the width of the fields
+# TODO: add button where you click and it shows a panel where you can customise the number of fiels + their properties(required, text/number/general format etc) 
+#   then save that config chnage into the COLUMNS variable in config.py
 
 def _open_file_picker(entry_widget):
     file_path = filedialog.askopenfilename(title="Select file for FileLink")
@@ -166,195 +150,6 @@ def build_insert_tab(tab):
     label_font = CTkFont(size=LABEL_FONT_SIZE)
     body_font = CTkFont(size=BODY_FONT_SIZE)
     title_font = CTkFont(size=SECTION_TITLE_SIZE, weight="bold")
-    field_types = ["text", "number", "general", "filelink"]
-    existing_by_name = {c.get("name"): c for c in COLUMNS}
-
-    def _rebuild_insert_tab():
-        for child in tab.winfo_children():
-            child.destroy()
-        build_insert_tab(tab)
-
-    def _open_fields_customizer():
-        panel = CTkToplevel(tab)
-        panel.title("Customize Fields")
-        panel.geometry("720x560")
-        panel.transient(tab.winfo_toplevel())
-        panel.grab_set()
-
-        CTkLabel(panel, text="Customize Insert Fields", font=CTkFont(size=18, weight="bold")).pack(
-            anchor="w", padx=12, pady=(12, 8)
-        )
-
-        rows_frame = CTkScrollableFrame(panel)
-        rows_frame.pack(fill="both", expand=True, padx=12, pady=(0, 10))
-        rows_frame.grid_columnconfigure(0, weight=3)
-        rows_frame.grid_columnconfigure(1, weight=2)
-        rows_frame.grid_columnconfigure(2, weight=1)
-        rows_frame.grid_columnconfigure(3, weight=0)
-
-        CTkLabel(rows_frame, text="Field Name", font=CTkFont(size=13, weight="bold")).grid(
-            row=0, column=0, sticky="w", padx=8, pady=(8, 6)
-        )
-        CTkLabel(rows_frame, text="Type", font=CTkFont(size=13, weight="bold")).grid(
-            row=0, column=1, sticky="w", padx=8, pady=(8, 6)
-        )
-        CTkLabel(rows_frame, text="Required", font=CTkFont(size=13, weight="bold")).grid(
-            row=0, column=2, sticky="w", padx=8, pady=(8, 6)
-        )
-
-        row_models = []
-
-        def _reflow_rows():
-            for idx, row in enumerate(row_models, start=1):
-                row["name_entry"].grid(row=idx, column=0, sticky="ew", padx=8, pady=4)
-                row["type_combo"].grid(row=idx, column=1, sticky="ew", padx=8, pady=4)
-                row["required_check"].grid(row=idx, column=2, sticky="w", padx=8, pady=4)
-                row["remove_btn"].grid(row=idx, column=3, sticky="e", padx=8, pady=4)
-
-        def _remove_row(model):
-            if len(row_models) <= 1:
-                messagebox.showwarning("Customize Fields", "At least one field is required.")
-                return
-
-            for widget in (
-                model["name_entry"],
-                model["type_combo"],
-                model["required_check"],
-                model["remove_btn"],
-            ):
-                widget.destroy()
-
-            row_models.remove(model)
-            _reflow_rows()
-
-        def _add_row(initial=None):
-            initial = initial or {}
-            required_var = BooleanVar(value=bool(initial.get("required", False)))
-
-            name_entry = CTkEntry(rows_frame)
-            name_entry.insert(0, str(initial.get("name", "")))
-
-            type_combo = CTkComboBox(rows_frame, values=field_types)
-            initial_type = str(initial.get("type", "text")).strip().lower()
-            type_combo.set(initial_type if initial_type in field_types else "text")
-
-            required_check = CTkCheckBox(rows_frame, text="", variable=required_var)
-
-            model = {
-                "original_name": initial.get("name"),
-                "name_entry": name_entry,
-                "type_combo": type_combo,
-                "required_var": required_var,
-                "required_check": required_check,
-                "remove_btn": None,
-            }
-
-            remove_btn = CTkButton(
-                rows_frame,
-                text="Remove",
-                width=86,
-                command=lambda m=model: _remove_row(m),
-            )
-            model["remove_btn"] = remove_btn
-
-            row_models.append(model)
-            _reflow_rows()
-
-        def _save_customized_fields():
-            old_columns_snapshot = [dict(c) for c in COLUMNS]
-            new_columns = []
-            seen_names = set()
-
-            for row in row_models:
-                name = row["name_entry"].get().strip()
-                col_type = row["type_combo"].get().strip().lower()
-                required = bool(row["required_var"].get())
-
-                if not name:
-                    messagebox.showerror("Customize Fields", "Field name cannot be empty.")
-                    return
-                if name in seen_names:
-                    messagebox.showerror("Customize Fields", f"Duplicate field name: {name}")
-                    return
-                if col_type not in field_types:
-                    messagebox.showerror("Customize Fields", f"Invalid type for {name}: {col_type}")
-                    return
-
-                seen_names.add(name)
-
-                original_name = row.get("original_name")
-                existing = existing_by_name.get(original_name) or existing_by_name.get(name) or {}
-                col_def = {
-                    "name": name,
-                    "type": col_type,
-                    "required": required,
-                }
-
-                if "unique" in existing:
-                    col_def["unique"] = existing["unique"]
-                if "validate" in existing:
-                    col_def["validate"] = existing["validate"]
-
-                if name == "File Number":
-                    col_def["required"] = True
-                    col_def["unique"] = True
-                    col_def["validate"] = "is_valid_fileNumber"
-
-                new_columns.append(col_def)
-
-            if not new_columns:
-                messagebox.showerror("Customize Fields", "At least one field is required.")
-                return
-
-            try:
-                save_columns_config(new_columns)
-            except Exception as exc:
-                messagebox.showerror("Customize Fields", f"Could not save config.py:\n{exc}")
-                return
-
-            try:
-                sync_form_sheet_columns(old_columns_snapshot, new_columns)
-            except Exception as exc:
-                # Roll back config file so app config and workbook schema do not diverge.
-                try:
-                    save_columns_config(old_columns_snapshot)
-                except Exception:
-                    pass
-                messagebox.showerror(
-                    "Customize Fields",
-                    "Config was not applied because workbook schema sync failed.\n"
-                    f"Reason: {exc}",
-                )
-                return
-
-            COLUMNS.clear()
-            COLUMNS.extend(new_columns)
-
-            SEARCH_BY.clear()
-            SEARCH_BY.extend([col["name"] for col in new_columns])
-
-            rebuild_search = getattr(tab, "rebuild_search", None)
-            if callable(rebuild_search):
-                rebuild_search()
-
-            panel.destroy()
-            messagebox.showinfo(
-                "Customize Fields",
-                "Field configuration saved and workbook columns updated.",
-            )
-            _rebuild_insert_tab()
-
-        for col in COLUMNS:
-            _add_row(col)
-
-        buttons = CTkFrame(panel, fg_color="transparent")
-        buttons.pack(fill="x", padx=12, pady=(0, 12))
-
-        CTkButton(buttons, text="Add Field", width=100, command=lambda: _add_row()).pack(side="left")
-        CTkButton(buttons, text="Cancel", width=100, command=panel.destroy).pack(side="right")
-        CTkButton(buttons, text="Save", width=100, command=_save_customized_fields).pack(
-            side="right", padx=(0, 8)
-        )
 
     outer_container = CTkFrame(tab, fg_color="transparent")
     outer_container.pack(fill="both", expand=True, padx=12, pady=12)
@@ -369,24 +164,6 @@ def build_insert_tab(tab):
     container.pack(pady=8)
     container.grid_columnconfigure(0, minsize=LABEL_COLUMN_MIN_WIDTH)
 
-    header_row = CTkFrame(container, fg_color="transparent")
-    header_row.grid(row=0, column=0, columnspan=3, sticky="ew", padx=ROW_PADX, pady=(10, 6))
-    header_row.grid_columnconfigure(0, weight=1)
-
-    CTkLabel(header_row, text="Insert Material Record", font=title_font).grid(
-        row=0,
-        column=0,
-        sticky="w",
-    )
-    CTkButton(
-        header_row,
-        text="Customize Fields",
-        height=BUTTON_HEIGHT,
-        corner_radius=BUTTON_CORNER_RADIUS,
-        font=body_font,
-        command=_open_fields_customizer,
-    ).grid(row=0, column=1, sticky="e")
-
     next_file_number_state = {"value": None}
 
     try:
@@ -397,7 +174,7 @@ def build_insert_tab(tab):
     fields = {}
     item_code_widget = None
     description_widget = None
-    for row_idx, col in enumerate(COLUMNS, start=1):
+    for row_idx, col in enumerate(COLUMNS):
         filelink_header = None
         if col.get("type") == "filelink":
             filelink_header = CTkFrame(container, fg_color="transparent")
@@ -566,7 +343,7 @@ def build_insert_tab(tab):
 
     save_button.configure(command=on_submit)
     save_button.grid(
-        row=len(COLUMNS) + 2,
+        row=len(COLUMNS) + 1,
         column=0,
         columnspan=3,
         sticky="ew",
