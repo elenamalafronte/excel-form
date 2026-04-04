@@ -73,8 +73,10 @@ def _show_success(file_number):
     messagebox.showinfo("Saved", f"Row saved with File Number: {file_number}")
 
 
-def _show_timed_success(file_number, elapsed_seconds, elapsed_before_save=None, elapsed_after_save=None):
+def _show_timed_success(file_number, elapsed_seconds, elapsed_before_save=None, elapsed_after_save=None, sheet_row=None):
     msg = f"Row saved with File Number: {file_number}"
+    if sheet_row is not None:
+        msg += f"\nSaved at worksheet row: {sheet_row}"
     # optionally include save vs refresh breakdown for debugging performance issues
     # if elapsed_before_save is not None and elapsed_after_save is not None:
     #     save_duration = elapsed_after_save - elapsed_before_save
@@ -930,15 +932,23 @@ def build_insert_tab(tab):
         def do_save():
             try:
                 elapsed_before_save = time.perf_counter() - started_at
-                append_row(data)
+                saved_row_idx = append_row(data)
                 elapsed_after_save = time.perf_counter() - started_at
-                tab.after(0, _on_save_success, file_number, started_at, elapsed_before_save, elapsed_after_save)
+                tab.after(
+                    0,
+                    _on_save_success,
+                    file_number,
+                    started_at,
+                    elapsed_before_save,
+                    elapsed_after_save,
+                    saved_row_idx,
+                )
             except Exception as exc:
                 tab.after(0, _on_save_error, str(exc), started_at)
 
         threading.Thread(target=do_save, daemon=True).start()
 
-    def _on_save_success(file_number, started_at, elapsed_before_save, elapsed_after_save):
+    def _on_save_success(file_number, started_at, elapsed_before_save, elapsed_after_save, saved_row_idx=None):
         elapsed_seconds = time.perf_counter() - started_at
         save_row_in_progress["value"] = False
         _set_button_saving_state(save_button, False, idle_text="Save Row")
@@ -946,7 +956,13 @@ def build_insert_tab(tab):
         # Ensure immediate ItemCode autofill uses fresh workbook rows.
         _invalidate_sheet_rows_cache()
 
-        _show_timed_success(file_number, elapsed_seconds, elapsed_before_save, elapsed_after_save)
+        _show_timed_success(
+            file_number,
+            elapsed_seconds,
+            elapsed_before_save,
+            elapsed_after_save,
+            sheet_row=saved_row_idx,
+        )
         try:
             next_file_number_state["value"] = get_next_fileNumber_from_value(file_number)
         except Exception:

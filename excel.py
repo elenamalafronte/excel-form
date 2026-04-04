@@ -16,6 +16,10 @@ from config import (
 )
 
 
+APP_DATA_START_ROW = 3
+EMPTY_ROW_STOP_THRESHOLD = 25
+
+
 def _open_workbook():
     path = Path(cfg.EXCEL_FILE)
     if path.exists():
@@ -112,6 +116,22 @@ def _find_sheet_zip_path(file_path, sheet_name):
     return normalized
 
 
+def _get_sheet_row_bounds(file_path: Path, sheet_name: str) -> tuple[int, int]:
+    """Return (first_row_with_tag, last_row_with_tag) for a worksheet XML.
+
+    Works across different workbook layouts where visual headers/data may start
+    far below row 1 because of formatting blocks.
+    """
+    sheet_zip_path = _find_sheet_zip_path(file_path, sheet_name)
+    with zipfile.ZipFile(file_path, "r") as z:
+        sheet_str = z.read(sheet_zip_path).decode("utf-8", "ignore")
+
+    row_numbers = [int(x) for x in re.findall(r'<row[^>]*\sr="(\d+)"', sheet_str)]
+    if not row_numbers:
+        return 1, 1
+    return min(row_numbers), max(row_numbers)
+
+
 def _build_row_xml(row_idx, row_values, cached_values=None):
     """Return the XML string for one worksheet row, using inline strings.
 
@@ -159,7 +179,14 @@ def _zip_append_row(file_path, row_values, new_row_idx, cached_values=None):
     with zipfile.ZipFile(file_path, "r") as z:
         sheet_str = z.read(sheet_zip_path).decode("utf-8")
 
-    if "</sheetData>" in sheet_str:
+    existing_row_full = re.compile(rf'<row[^>]*\br="{new_row_idx}"[^>]*>.*?</row>', re.S)
+    existing_row_self = re.compile(rf'<row[^>]*\br="{new_row_idx}"[^>]*/>', re.S)
+
+    if existing_row_full.search(sheet_str):
+        sheet_str = existing_row_full.sub(new_row_xml, sheet_str, count=1)
+    elif existing_row_self.search(sheet_str):
+        sheet_str = existing_row_self.sub(new_row_xml, sheet_str, count=1)
+    elif "</sheetData>" in sheet_str:
         sheet_str = sheet_str.replace("</sheetData>", f"{new_row_xml}</sheetData>", 1)
     elif re.search(r"<sheetData\s*/>", sheet_str):
         # Empty sheets can use a self-closing sheetData tag.
@@ -171,9 +198,14 @@ def _zip_append_row(file_path, row_values, new_row_idx, cached_values=None):
         )
     else:
         raise ValueError(f"sheetData section not found in {sheet_zip_path}")
+    def _update_dimension(match):
+        current_max = int(match.group(3))
+        max_row = max(current_max, new_row_idx)
+        return f"{match.group(1)}{match.group(2)}{max_row}{match.group(4)}"
+
     sheet_str = re.sub(
         r'(<dimension ref="[A-Z]+\d+:)([A-Z]+)(\d+)(")',
-        lambda m: f"{m.group(1)}{m.group(2)}{new_row_idx}{m.group(4)}",
+        _update_dimension,
         sheet_str,
     )
 
@@ -273,33 +305,33 @@ def _build_description_index_fallback(file_path: Path) -> dict:
         return {}
 
 
-# Module-level description index cache — rebuilt only when the file changes.
-# Avoids re-scanning 15 000 CREXPD01 rows on every search click.
+# Module-level description index cache.
+# Rebuilt only when workbook settings change (or cache is explicitly invalidated),
+# so saving a form row does not trigger a full source-sheet rescan.
 _desc_index_cache: dict = {}
-_desc_index_file_sig: tuple[int, int] | None = None
+_desc_index_cache_key: tuple[str, str] | None = None
 
 
 def _invalidate_desc_index_cache() -> None:
-    global _desc_index_cache, _desc_index_file_sig
+    global _desc_index_cache, _desc_index_cache_key
     _desc_index_cache = {}
-    _desc_index_file_sig = None
+    _desc_index_cache_key = None
 
 
 def _get_desc_index(path: Path) -> dict:
     """Return a cached {ItemCode.upper(): description} dict for the given file.
 
-    The cache is invalidated whenever the file's mtime changes, so it stays
-    fresh after every insert without rescanning on every search.
+    The source sheet rarely changes while the app is running, so cache by
+    workbook path + source sheet name and rebuild only on explicit invalidation.
     """
-    global _desc_index_cache, _desc_index_file_sig
-    try:
-        stat = path.stat()
-        file_sig = (int(stat.st_mtime_ns), int(stat.st_size))
-    except OSError:
+    global _desc_index_cache, _desc_index_cache_key
+    if not path.exists():
         return {}
-    if file_sig != _desc_index_file_sig:
+
+    cache_key = (str(path.resolve()), str(cfg.SOURCE_SHEET_NAME))
+    if cache_key != _desc_index_cache_key:
         _desc_index_cache = _build_description_index(path)
-        _desc_index_file_sig = file_sig
+        _desc_index_cache_key = cache_key
     return _desc_index_cache
 
 
@@ -316,12 +348,12 @@ def get_description_for_itemcode(item_code: str) -> str:
     return desc_index.get(str(item_code).strip().upper(), "") or ""
 
 
-def load_sheet(_allow_recalc=True):
+def load_sheet():
     """Return worksheet rows as list[dict], excluding the header row.
 
     Description is resolved from a Python-side lookup against CREXPD01 so
     that the Search tab always shows the right value, independent of whether
-    Excel has recalculated and cached the formula result.  The index is built
+    Excel has recalculated and cached the formula result. The index is built
     once and cached by file mtime, so repeated searches are instant.
     """
     path = Path(cfg.EXCEL_FILE)
@@ -345,9 +377,13 @@ def load_sheet(_allow_recalc=True):
         (idx for idx, col in enumerate(COLUMNS) if col["name"] == "FileLink"), None
     )
 
+    min_data_row = APP_DATA_START_ROW
+    max_data_row = ws.max_row
+
     rows = []
+    saw_data = False
     consecutive_empty = 0
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+    for row in ws.iter_rows(min_row=min_data_row, max_row=max_data_row):
         row_dict = {}
         for i in range(len(headers)):
             cell = row[i] if i < len(row) else None
@@ -361,6 +397,7 @@ def load_sheet(_allow_recalc=True):
                 row_dict[headers[i]] = cell.value
 
         if any(v not in (None, "") for v in row_dict.values()):
+            saw_data = True
             consecutive_empty = 0
             if row_dict.get("ItemCode") and desc_index:
                 ic = str(row_dict["ItemCode"]).strip().upper()
@@ -370,26 +407,10 @@ def load_sheet(_allow_recalc=True):
             rows.append(row_dict)
         else:
             consecutive_empty += 1
-            if consecutive_empty > 10:
+            if consecutive_empty > EMPTY_ROW_STOP_THRESHOLD:
                 break
 
     wb.close()
-
-    # If a row has an ItemCode that exists in CREXPD01 but Description is still
-    # blank, force one Excel recalc/save pass and reload once.
-    if _allow_recalc and desc_index:
-        should_recalc = False
-        for row in rows:
-            item_code = str(row.get("ItemCode", "")).strip().upper()
-            description = str(row.get("Description", "") or "").strip()
-            if item_code and not description and item_code in desc_index:
-                should_recalc = True
-                break
-
-        if should_recalc:
-            _excel_recalc_and_save(path)
-            return load_sheet(_allow_recalc=False)
-
     return rows
 
 
@@ -438,32 +459,36 @@ def append_row(data: dict):
     if not file_path.exists():
         raise FileNotFoundError(f"Workbook not found: {cfg.EXCEL_FILE}")
     try:
-        wb = load_workbook(file_path)
+        headers = [col["name"] for col in COLUMNS]
+
+        wb = load_workbook(file_path, read_only=True, data_only=True, keep_vba=file_path.suffix.lower() == ".xlsm")
         try:
-            ws_form = _get_layout_sheets(wb)[1]
-
-            headers = []
-            for col_idx in range(1, ws_form.max_column + 1):
-                value = ws_form.cell(row=1, column=col_idx).value
-                headers.append(str(value).strip() if value is not None else "")
-
-            if not headers:
-                headers = [col["name"] for col in COLUMNS]
-
-            # Find the last non-empty row by scanning upward so empty formatted rows
-            # at the end do not cause gaps in the inserted data.
-            last_data_row = 1
-            for row_idx in range(ws_form.max_row, 1, -1):
-                if any(
-                    ws_form.cell(row=row_idx, column=col_idx).value not in (None, "")
-                    for col_idx in range(1, ws_form.max_column + 1)
+            ws_form = _get_form_sheet_for_read(wb)
+            if ws_form is None:
+                last_data_row = APP_DATA_START_ROW - 1
+            else:
+                last_data_row = APP_DATA_START_ROW - 1
+                saw_data = False
+                empty_count = 0
+                for row_idx, row in enumerate(
+                    ws_form.iter_rows(min_row=APP_DATA_START_ROW, max_row=ws_form.max_row, values_only=True),
+                    start=APP_DATA_START_ROW,
                 ):
-                    last_data_row = row_idx
-                    break
+                    row_vals = row[:len(headers)] if row else ()
+                    if any(v not in (None, "") for v in row_vals):
+                        saw_data = True
+                        empty_count = 0
+                        last_data_row = row_idx
+                    else:
+                        empty_count += 1
+                        if saw_data and empty_count > EMPTY_ROW_STOP_THRESHOLD:
+                            break
+                        if not saw_data and empty_count > EMPTY_ROW_STOP_THRESHOLD:
+                            break
         finally:
             wb.close()
 
-        new_row_idx = last_data_row + 1
+        new_row_idx = max(last_data_row + 1, APP_DATA_START_ROW)
 
         row_values = [data.get(name, "") for name in headers]
         cached_values = {}
@@ -490,7 +515,8 @@ def append_row(data: dict):
             f"Cannot save workbook. Close '{cfg.EXCEL_FILE}' in Excel and try again."
         ) from exc
 
-    _invalidate_desc_index_cache()
+    # Return the physical worksheet row number that was written.
+    return new_row_idx
 
 
 def sync_form_sheet_columns(old_columns, new_columns):
@@ -566,10 +592,8 @@ def sync_form_sheet_columns(old_columns, new_columns):
     finally:
         wb.close()
 
-    # Schema sync can change formulas/references; reset in-memory indexes and
-    # trigger one recalc pass so Insert/Search resolve descriptions immediately.
-    _invalidate_desc_index_cache()
-    _excel_recalc_and_save(file_path)
+    # Schema sync can change formulas/references; reset in-memory indexes so
+    # Insert/Search rebuild their cached lookups against the new workbook shape.
     _invalidate_desc_index_cache()
 
 

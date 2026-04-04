@@ -3,9 +3,9 @@ import ast
 import pprint
 from pathlib import Path
 
-EXCEL_FILE = 'C:\\Users\\Elena Malafronte\\Downloads\\hobby\\website projects\\excel-form\\test.xlsx'
-SOURCE_SHEET_NAME = 'test1'
-FORM_SHEET_NAME = 'sheet2'
+EXCEL_FILE = 'C:\\Users\\Elena Malafronte\\Downloads\\hobby\\website projects\\excel-form\\Heat number summary.xlsm'
+SOURCE_SHEET_NAME = 'CREXPD01'
+FORM_SHEET_NAME = 'Heat Number'
 
 # Workbook layout:
 # 1) first sheet = raw data, read-only
@@ -19,6 +19,14 @@ COLUMNS = [{'name': 'File Number',
   'validate': 'is_valid_fileNumber'},
  {'name': 'ItemCode', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
  {'name': 'Description', 'type': 'general', 'required': False, 'validate': None},
+ {'name': 'Qty_EA', 'type': 'text', 'required': False},
+ {'name': 'Qty_mt', 'type': 'text', 'required': False},
+ {'name': 'HeatNumber', 'type': 'text', 'required': False},
+ {'name': 'ManufacturerTestReport(MTR)No', 'type': 'text', 'required': False},
+ {'name': 'Manufacturer/Supplier', 'type': 'text', 'required': False},
+ {'name': 'PackinglistNo', 'type': 'text', 'required': False},
+ {'name': 'ShippingNotice', 'type': 'text', 'required': False},
+ {'name': 'PO/MR', 'type': 'text', 'required': False},
  {'name': 'QualityControlManufactDossier(QCMD)',
   'type': 'text',
   'required': False,
@@ -26,8 +34,7 @@ COLUMNS = [{'name': 'File Number',
   'validate': None},
  {'name': 'Rev', 'type': 'general', 'required': False, 'unique': False, 'validate': None},
  {'name': 'PAGENr', 'type': 'text', 'required': False, 'unique': False, 'validate': None},
- {'name': 'FileLink', 'type': 'filelink', 'required': False, 'validate': None},
- {'name': 'Qt_Test', 'type': 'text', 'required': False}]
+ {'name': 'FileLink', 'type': 'filelink', 'required': False, 'validate': None}]
 
 
 def save_columns_config(new_columns, config_file_path=None):

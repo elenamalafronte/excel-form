@@ -560,7 +560,6 @@ def build_search_tab(tab):
             refresh_button.configure(state="normal", text=original_text)
 
     def refresh_after_recalc():
-        recalc_workbook()
         on_search()
 
     def upload_pdf_for_selected_row():
