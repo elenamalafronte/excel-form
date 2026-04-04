@@ -94,6 +94,8 @@ def build_search_tab(tab):
     column_visibility_vars = {}
     current_rows = []
     last_fitted_width = -1
+    auto_fit_columns = True
+    row_height_recalc_job = None
 
     def fit_columns_to_available_width(redraw=False):
         visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
@@ -153,6 +155,22 @@ def build_search_tab(tab):
             results_sheet.redraw()
         return True
 
+    def recompute_row_heights(redraw=False):
+        # Recompute from text so rows can both grow and shrink after width changes.
+        results_sheet.row_height("all", "text", only_set_if_too_small=False, redraw=redraw)
+
+    def schedule_row_height_recalc(delay_ms=80):
+        nonlocal row_height_recalc_job
+        if row_height_recalc_job is not None:
+            tab.after_cancel(row_height_recalc_job)
+
+        def _run():
+            nonlocal row_height_recalc_job
+            row_height_recalc_job = None
+            recompute_row_heights(redraw=True)
+
+        row_height_recalc_job = tab.after(delay_ms, _run)
+
     def apply_display_columns():
         if not hidden_columns:
             results_sheet.display_columns(
@@ -162,7 +180,9 @@ def build_search_tab(tab):
                 redraw=True,
                 deselect_all=False,
             )
-            fit_columns_to_available_width(redraw=True)
+            if auto_fit_columns:
+                fit_columns_to_available_width(redraw=True)
+            schedule_row_height_recalc()
             return
 
         visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
@@ -173,7 +193,9 @@ def build_search_tab(tab):
             redraw=True,
             deselect_all=False,
         )
-        fit_columns_to_available_width(redraw=True)
+        if auto_fit_columns:
+            fit_columns_to_available_width(redraw=True)
+        schedule_row_height_recalc()
 
     def get_selected_row_index():
         selected_rows = results_sheet.get_selected_rows(get_cells_as_rows=True)
@@ -413,8 +435,9 @@ def build_search_tab(tab):
                 redraw=False,
                 keep_formatting=False,
             )
-        fit_columns_to_available_width(redraw=False)
-        results_sheet.row_height("all", "text", only_set_if_too_small=True, redraw=False)
+        if auto_fit_columns:
+            fit_columns_to_available_width(redraw=False)
+        recompute_row_heights(redraw=False)
         apply_display_columns()
         results_sheet.deselect("all", redraw=False)
         results_sheet.redraw()
@@ -527,13 +550,22 @@ def build_search_tab(tab):
     results_sheet.bind("<ButtonRelease-1>", lambda event: _update_selected_actions_ui())
     results_sheet.bind("<KeyRelease>", lambda event: _update_selected_actions_ui())
 
+    def on_user_column_resize(event=None):
+        nonlocal auto_fit_columns
+        auto_fit_columns = False
+        schedule_row_height_recalc()
+
+    results_sheet.extra_bindings("column_width_resize", func=on_user_column_resize)
+    results_sheet.extra_bindings("double_click_column_resize", func=on_user_column_resize)
+
     def on_sheet_configure(event):
         nonlocal last_fitted_width
         if event.width <= 20:
             return
         # Re-fit when table viewport width changes so columns always fill container width.
-        if abs(event.width - last_fitted_width) >= 3:
+        if auto_fit_columns and abs(event.width - last_fitted_width) >= 3:
             fit_columns_to_available_width(redraw=True)
+            schedule_row_height_recalc()
             last_fitted_width = event.width
 
     results_sheet.bind("<Configure>", on_sheet_configure, add="+")
