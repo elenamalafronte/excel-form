@@ -474,6 +474,62 @@ def append_row(data: dict):
     _excel_recalc_and_save(file_path)
 
 
+def sync_form_sheet_columns(old_columns, new_columns):
+    """Sync Heat Number sheet schema to match new columns.
+
+    Existing data is preserved by matching values via old column names.
+    Columns removed from config are removed from the sheet.
+    Newly added columns are created with blank values for existing rows.
+    """
+    file_path = Path(EXCEL_FILE)
+
+    wb = _open_workbook()
+    _, ws_form = _get_layout_sheets(wb)
+
+    old_names = [c.get("name") for c in old_columns if c.get("name")]
+    new_names = [c.get("name") for c in new_columns if c.get("name")]
+
+    if not new_names:
+        raise ValueError("Cannot sync workbook: no target columns defined")
+
+    # Prefer real sheet headers when present, otherwise fall back to old config names.
+    sheet_headers = []
+    if ws_form.max_row >= 1:
+        for col_idx in range(1, ws_form.max_column + 1):
+            val = ws_form.cell(row=1, column=col_idx).value
+            sheet_headers.append(str(val).strip() if val is not None else "")
+
+    effective_old_names = [h for h in sheet_headers if h] or old_names
+
+    # Capture existing rows as dictionaries keyed by old headers.
+    existing_row_dicts = []
+    if ws_form.max_row >= 2 and effective_old_names:
+        for row_idx in range(2, ws_form.max_row + 1):
+            row_dict = {}
+            has_data = False
+            for col_idx, header in enumerate(effective_old_names, start=1):
+                if not header:
+                    continue
+                value = ws_form.cell(row=row_idx, column=col_idx).value
+                row_dict[header] = value
+                if value not in (None, ""):
+                    has_data = True
+            if has_data:
+                existing_row_dicts.append(row_dict)
+
+    # Rebuild the sheet with the new schema.
+    ws_form.delete_rows(1, ws_form.max_row)
+    ws_form.append(new_names)
+
+    for row_dict in existing_row_dicts:
+        ws_form.append([row_dict.get(name, "") for name in new_names])
+
+    try:
+        wb.save(file_path)
+    finally:
+        wb.close()
+
+
 def search_rows(search_value, search_column="ItemCode"):
     rows = load_sheet()
     if not search_value:
