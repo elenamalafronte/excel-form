@@ -435,6 +435,8 @@ def build_search_tab(tab):
         height=BUTTON_HEIGHT,
         corner_radius=BUTTON_CORNER_RADIUS,
         font=body_font,
+        fg_color="#2E8B57",
+        hover_color="#236B43",
     ).grid(
         row=4, column=4, sticky="ew", padx=ROW_PADX, pady=10
     )
