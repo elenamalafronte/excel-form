@@ -6,7 +6,7 @@ from pathlib import Path
 from customtkinter import CTkButton, CTkEntry, CTkFont, CTkFrame, CTkLabel, CTkTextbox, CTkScrollableFrame
 
 from config import COLUMNS, EXCEL_FILE, get_next_fileNumber, get_next_fileNumber_from_value
-from excel import append_row, load_sheet
+from excel import append_row, get_description_for_itemcode, load_sheet
 from ui_style import (
     BODY_FONT_SIZE,
     BUTTON_CORNER_RADIUS,
@@ -101,12 +101,13 @@ def _lookup_description_for_itemcode(item_code, rows):
 
     for row in rows or []:
         if str(row.get("ItemCode", "")).strip().upper() == item_code:
-            # TODO: if your source description column has a different name,
-            # change "Description" here only.
-            return row.get("Description", "") or ""
+            # Prefer a non-empty description when duplicates exist.
+            description = (row.get("Description", "") or "").strip()
+            if description:
+                return description
 
-    # Return an empty string when nothing matches so the field clears cleanly.
-    return ""
+    # Fallback to source sheet lookup so new ItemCodes autofill before save.
+    return get_description_for_itemcode(item_code)
 
 
 def _update_description_field(description_widget, item_code_widget):
