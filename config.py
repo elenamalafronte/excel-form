@@ -1,9 +1,17 @@
 import re
 import ast
 import pprint
+import sys
 from pathlib import Path
 
-EXCEL_FILE = 'C:\\Users\\Elena Malafronte\\Downloads\\hobby\\website projects\\excel-form\\Heat number summary.xlsm'
+
+def _runtime_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+EXCEL_FILE = str((_runtime_dir() / 'Heat number summary.xlsm').resolve())
 SOURCE_SHEET_NAME = 'CREXPD01'
 FORM_SHEET_NAME = 'Heat Number'
 
