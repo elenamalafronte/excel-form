@@ -205,93 +205,13 @@ def _col_str_to_idx(col_str: str) -> int:
 
 
 def _build_description_index(file_path: Path) -> dict:
-    """Return {ItemCode.upper(): description} by parsing CREXPD01 XML directly.
+    """Return {ItemCode.upper(): description} from source sheet.
 
-    Reads sharedStrings.xml and the CREXPD01 worksheet XML straight from the
-    ZIP archive, bypassing openpyxl's read-only streaming layer entirely.
-    This avoids the known issue where openpyxl read_only=True returns None
-    for shared-string cells when the string table hasn't been fully loaded.
+    Reads from Ident Code (column O) and Detailed Description (column R) columns.
+    Uses openpyxl with direct column detection to match the Excel formula mapping.
     """
-    try:
-        crexpd01_zip_path = _find_sheet_zip_path(file_path, cfg.SOURCE_SHEET_NAME)
-    except (ValueError, KeyError):
-        return {}
+    return _build_description_index_fallback(file_path)
 
-    try:
-        with zipfile.ZipFile(file_path, "r") as z:
-            # Build the shared-strings lookup (most string cells use t="s")
-            shared_strings: list = []
-            if "xl/sharedStrings.xml" in z.namelist():
-                ss_xml = z.read("xl/sharedStrings.xml").decode("utf-8")
-                for si in re.findall(r"<si>(.*?)</si>", ss_xml, re.DOTALL):
-                    parts = re.findall(r"<t(?:[^>]*)?>([^<]*)</t>", si)
-                    raw = "".join(parts)
-                    # Unescape XML entities so item codes / descriptions look right
-                    raw = (raw.replace("&amp;", "&").replace("&lt;", "<")
-                               .replace("&gt;", ">").replace("&quot;", '"')
-                               .replace("&apos;", "'"))
-                    shared_strings.append(raw)
-
-            sheet_xml = z.read(crexpd01_zip_path).decode("utf-8")
-    except Exception:
-        return {}
-
-    def _cell_value(t: str, inner: str) -> str:
-        if t == "s":
-            m = re.search(r"<v>(\d+)</v>", inner)
-            if m:
-                idx = int(m.group(1))
-                return shared_strings[idx] if idx < len(shared_strings) else ""
-        elif t == "inlineStr":
-            m = re.search(r"<t[^>]*>([^<]*)</t>", inner)
-            return m.group(1) if m else ""
-        else:
-            m = re.search(r"<v>([^<]*)</v>", inner)
-            return m.group(1) if m else ""
-        return ""
-
-    item_code_col: int = _CREXPD01_ITEMCODE_COL_FALLBACK
-    description_col: "int | None" = None
-    index: dict = {}
-
-    for row_match in re.finditer(
-        r'<row\b[^>]*\br="(\d+)"[^>]*>(.*?)</row>', sheet_xml, re.DOTALL
-    ):
-        row_num = int(row_match.group(1))
-        row_xml = row_match.group(2)
-
-        cells: dict = {}
-        for cell_match in re.finditer(r"<c\b([^>]*)>(.*?)</c>", row_xml, re.DOTALL):
-            attrs = cell_match.group(1)
-            inner = cell_match.group(2)
-            r_m = re.search(r'\br="([A-Z]+)', attrs)
-            if not r_m:
-                continue
-            col_idx = _col_str_to_idx(r_m.group(1))
-            t_m = re.search(r'\bt="([^"]*)"', attrs)
-            cells[col_idx] = _cell_value(t_m.group(1) if t_m else "", inner)
-
-        if row_num == 1:
-            for col_idx, val in cells.items():
-                normalized = val.strip().lower().replace(" ", "").replace("_", "")
-                if "itemcode" in normalized:
-                    item_code_col = col_idx
-                if "detaileddescription" in normalized:
-                    description_col = col_idx
-            if description_col is None:
-                return {}
-        elif description_col is not None:
-            ic = cells.get(item_code_col, "").strip()
-            desc = cells.get(description_col, "").strip()
-            if ic:
-                index[ic.upper()] = desc
-
-    # If XML parsing yielded nothing (or became incompatible with workbook
-    # serialization), fall back to openpyxl-based extraction.
-    if not index:
-        return _build_description_index_fallback(file_path)
-
-    return index
 
 
 def _build_description_index_fallback(file_path: Path) -> dict:
@@ -319,7 +239,10 @@ def _build_description_index_fallback(file_path: Path) -> dict:
         item_idx = -1
         desc_idx = -1
         for idx, name in enumerate(normalized_headers):
-            if item_idx < 0 and "itemcode" in name:
+            # Prefer "Ident Code" over "Item Code" to match Excel formula that uses column O
+            if "identcode" in name:
+                item_idx = idx
+            elif "itemcode" in name and item_idx < 0:
                 item_idx = idx
             if desc_idx < 0 and "detaileddescription" in name:
                 desc_idx = idx
@@ -353,13 +276,13 @@ def _build_description_index_fallback(file_path: Path) -> dict:
 # Module-level description index cache — rebuilt only when the file changes.
 # Avoids re-scanning 15 000 CREXPD01 rows on every search click.
 _desc_index_cache: dict = {}
-_desc_index_mtime: float | None = None
+_desc_index_file_sig: tuple[int, int] | None = None
 
 
 def _invalidate_desc_index_cache() -> None:
-    global _desc_index_cache, _desc_index_mtime
+    global _desc_index_cache, _desc_index_file_sig
     _desc_index_cache = {}
-    _desc_index_mtime = None
+    _desc_index_file_sig = None
 
 
 def _get_desc_index(path: Path) -> dict:
@@ -368,14 +291,15 @@ def _get_desc_index(path: Path) -> dict:
     The cache is invalidated whenever the file's mtime changes, so it stays
     fresh after every insert without rescanning on every search.
     """
-    global _desc_index_cache, _desc_index_mtime
+    global _desc_index_cache, _desc_index_file_sig
     try:
-        mtime = path.stat().st_mtime
+        stat = path.stat()
+        file_sig = (int(stat.st_mtime_ns), int(stat.st_size))
     except OSError:
         return {}
-    if mtime != _desc_index_mtime:
+    if file_sig != _desc_index_file_sig:
         _desc_index_cache = _build_description_index(path)
-        _desc_index_mtime = mtime
+        _desc_index_file_sig = file_sig
     return _desc_index_cache
 
 
@@ -515,46 +439,52 @@ def append_row(data: dict):
         raise FileNotFoundError(f"Workbook not found: {cfg.EXCEL_FILE}")
     try:
         wb = load_workbook(file_path)
-        ws_form = _get_layout_sheets(wb)[1]
+        try:
+            ws_form = _get_layout_sheets(wb)[1]
 
-        headers = []
-        for col_idx in range(1, ws_form.max_column + 1):
-            value = ws_form.cell(row=1, column=col_idx).value
-            headers.append(str(value).strip() if value is not None else "")
+            headers = []
+            for col_idx in range(1, ws_form.max_column + 1):
+                value = ws_form.cell(row=1, column=col_idx).value
+                headers.append(str(value).strip() if value is not None else "")
 
-        if not headers:
-            headers = [col["name"] for col in COLUMNS]
+            if not headers:
+                headers = [col["name"] for col in COLUMNS]
 
-        # Find the last non-empty row by scanning upward so empty formatted rows
-        # at the end do not cause gaps in the inserted data.
-        last_data_row = 1
-        for row_idx in range(ws_form.max_row, 1, -1):
-            if any(ws_form.cell(row=row_idx, column=col_idx).value not in (None, "") for col_idx in range(1, ws_form.max_column + 1)):
-                last_data_row = row_idx
-                break
+            # Find the last non-empty row by scanning upward so empty formatted rows
+            # at the end do not cause gaps in the inserted data.
+            last_data_row = 1
+            for row_idx in range(ws_form.max_row, 1, -1):
+                if any(
+                    ws_form.cell(row=row_idx, column=col_idx).value not in (None, "")
+                    for col_idx in range(1, ws_form.max_column + 1)
+                ):
+                    last_data_row = row_idx
+                    break
+        finally:
+            wb.close()
 
         new_row_idx = last_data_row + 1
 
         row_values = [data.get(name, "") for name in headers]
+        cached_values = {}
+
         desc_col_idx = next((i for i, name in enumerate(headers) if name == "Description"), None)
         item_code_col_idx = next((i for i, name in enumerate(headers) if name == "ItemCode"), None)
 
         if desc_col_idx is not None and item_code_col_idx is not None:
             item_code_col_letter = _col_idx_to_letter(item_code_col_idx)
+            item_code_value = str(data.get("ItemCode", "") or "").strip()
             row_values[desc_col_idx] = build_description_formula(
                 f"{item_code_col_letter}{new_row_idx}", cfg.SOURCE_SHEET_NAME
             )
+            # Seed formula cached value so Search/Insert see Description immediately
+            # even before Excel performs a recalc/save pass.
+            if item_code_value:
+                looked_up = get_description_for_itemcode(item_code_value)
+                if looked_up:
+                    cached_values[desc_col_idx] = looked_up
 
-        for col_idx, value in enumerate(row_values, start=1):
-            cell = ws_form.cell(row=new_row_idx, column=col_idx)
-            cell.value = value
-
-            if headers[col_idx - 1] == "FileLink" and value:
-                cell.hyperlink = value
-                cell.style = "Hyperlink"
-
-        wb.save(file_path)
-        wb.close()
+        _zip_append_row(file_path, row_values, new_row_idx, cached_values=cached_values)
     except PermissionError as exc:
         raise PermissionError(
             f"Cannot save workbook. Close '{cfg.EXCEL_FILE}' in Excel and try again."

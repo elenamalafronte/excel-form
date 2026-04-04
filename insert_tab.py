@@ -114,13 +114,13 @@ def _set_button_saving_state(button, is_saving, idle_text, busy_text="Saving..."
 
 
 _sheet_rows_cache = None
-_sheet_rows_cache_mtime = None
+_sheet_rows_cache_file_sig = None
 
 
 def _invalidate_sheet_rows_cache():
-    global _sheet_rows_cache, _sheet_rows_cache_mtime
+    global _sheet_rows_cache, _sheet_rows_cache_file_sig
     _sheet_rows_cache = None
-    _sheet_rows_cache_mtime = None
+    _sheet_rows_cache_file_sig = None
 
 
 def _get_cached_sheet_rows():
@@ -129,22 +129,23 @@ def _get_cached_sheet_rows():
     TODO: if you later want even faster autofill, keep this cache warm after
     startup instead of waiting for the first ItemCode lookup.
     """
-    global _sheet_rows_cache, _sheet_rows_cache_mtime
+    global _sheet_rows_cache, _sheet_rows_cache_file_sig
 
     workbook_path = Path(cfg.EXCEL_FILE)
     if not workbook_path.exists():
         _sheet_rows_cache = []
-        _sheet_rows_cache_mtime = None
+        _sheet_rows_cache_file_sig = None
         return _sheet_rows_cache
 
     try:
-        current_mtime = workbook_path.stat().st_mtime
+        stat = workbook_path.stat()
+        current_file_sig = (int(stat.st_mtime_ns), int(stat.st_size))
     except OSError:
         return load_sheet()
 
-    if current_mtime != _sheet_rows_cache_mtime:
+    if current_file_sig != _sheet_rows_cache_file_sig:
         _sheet_rows_cache = load_sheet()
-        _sheet_rows_cache_mtime = current_mtime
+        _sheet_rows_cache_file_sig = current_file_sig
 
     return _sheet_rows_cache
 

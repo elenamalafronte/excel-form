@@ -15,5 +15,6 @@ env/
 # Generated workbook and Excel temp files
 Heat number summary.xlsm
 Heat number summary.xlsx
+test.xlsx
 ~$*.xlsm
 ~$*.xlsx
