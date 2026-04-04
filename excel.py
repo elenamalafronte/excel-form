@@ -285,7 +285,68 @@ def _build_description_index(file_path: Path) -> dict:
             if ic:
                 index[ic.upper()] = desc
 
+    # If XML parsing yielded nothing (or became incompatible with workbook
+    # serialization), fall back to openpyxl-based extraction.
+    if not index:
+        return _build_description_index_fallback(file_path)
+
     return index
+
+
+def _build_description_index_fallback(file_path: Path) -> dict:
+    """Fallback description index builder using openpyxl row values."""
+    try:
+        wb = load_workbook(file_path, read_only=True, data_only=True)
+        if "CREXPD01" in wb.sheetnames:
+            ws = wb["CREXPD01"]
+        elif wb.worksheets:
+            ws = wb.worksheets[0]
+        else:
+            wb.close()
+            return {}
+
+        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+        if not header_row:
+            wb.close()
+            return {}
+
+        normalized_headers = [
+            str(h or "").strip().lower().replace(" ", "").replace("_", "")
+            for h in header_row
+        ]
+
+        item_idx = -1
+        desc_idx = -1
+        for idx, name in enumerate(normalized_headers):
+            if item_idx < 0 and "itemcode" in name:
+                item_idx = idx
+            if desc_idx < 0 and "detaileddescription" in name:
+                desc_idx = idx
+
+        if item_idx < 0 or desc_idx < 0:
+            wb.close()
+            return {}
+
+        index = {}
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row:
+                continue
+
+            item_code = ""
+            description = ""
+
+            if item_idx < len(row) and row[item_idx] is not None:
+                item_code = str(row[item_idx]).strip().upper()
+            if desc_idx < len(row) and row[desc_idx] is not None:
+                description = str(row[desc_idx]).strip()
+
+            if item_code:
+                index[item_code] = description
+
+        wb.close()
+        return index
+    except Exception:
+        return {}
 
 
 # Module-level description index cache — rebuilt only when the file changes.
@@ -430,6 +491,15 @@ def _excel_recalc_and_save(file_path: Path) -> None:
         )
     except Exception:
         pass  # non-fatal: description will update next time Excel saves
+
+
+def recalc_workbook() -> None:
+    """Force Excel recalculation/save for the configured workbook."""
+    file_path = Path(EXCEL_FILE)
+    if not file_path.exists():
+        return
+    _excel_recalc_and_save(file_path)
+    _invalidate_desc_index_cache()
 
 
 def append_row(data: dict):
@@ -640,6 +710,7 @@ def update_file_link(file_number: str, file_link: str) -> bool:
 
         if updated:
             wb.save(file_path)
+            _invalidate_desc_index_cache()
         return updated
     finally:
         wb.close()

@@ -54,8 +54,9 @@ def build_app():
 		current_tab = tabview.get()
 		if current_tab != last_tab["name"]:
 			last_tab["name"] = current_tab
-			if current_tab == "Search" and hasattr(tab_search, "refresh_search"):
-				tab_search.refresh_search()
+			if current_tab == "Search":
+				if hasattr(tab_search, "refresh_search"):
+					tab_search.refresh_search()
 		app.after(200, watch_tab_selection)
 
 	watch_tab_selection()

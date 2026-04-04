@@ -15,7 +15,7 @@ from customtkinter import (
 )
 
 from config import COLUMNS, EXCEL_FILE, SEARCH_BY
-from excel import search_rows, update_file_link
+from excel import recalc_workbook, search_rows, update_file_link
 from ui_style import (
     BODY_FONT_SIZE,
     BUTTON_CORNER_RADIUS,
@@ -305,6 +305,10 @@ def build_search_tab(tab):
         finally:
             refresh_button.configure(state="normal", text=original_text)
 
+    def refresh_after_recalc():
+        recalc_workbook()
+        on_search()
+
     def upload_pdf_for_selected_row():
         values = _selected_row_values()
         if not values or file_number_col_idx < 0:
@@ -334,7 +338,7 @@ def build_search_tab(tab):
                 messagebox.showwarning("Upload PDF", "Could not find the selected row in workbook.")
                 return
 
-            on_search()
+            refresh_after_recalc()
             # Restore selection after refresh when possible.
             for item_id in results_tree.get_children():
                 row_values = results_tree.item(item_id, "values")
@@ -350,6 +354,7 @@ def build_search_tab(tab):
                 upload_pdf_button.configure(state="normal", text=original_text)
 
     tab.refresh_search = on_search
+    tab.refresh_search_with_recalc = refresh_after_recalc
     tab.auto_refresh_search = lambda: on_search()
 
     def open_workbook():
