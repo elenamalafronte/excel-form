@@ -1,4 +1,7 @@
 import re
+import ast
+import pprint
+from pathlib import Path
 
 EXCEL_FILE = "Heat number summary.xlsx"
 
@@ -7,111 +10,70 @@ EXCEL_FILE = "Heat number summary.xlsx"
 # 2) second sheet = form output, read/write
 # 3) third sheet = generated final sheet, untouched by this app
 
-COLUMNS = [
-    {
-        "name": "File Number",
-        "type": "text",
-        "unique": True,
-        "required": True,
-        "validate": "is_valid_fileNumber",   # custom validation function for this column
-    },
-    {
-        "name": "ItemCode",
-        "type": "text",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "Description",
-        "type": "general",
-        "required": False,
-        "validate": None,
-    },
-    {
-        "name": "Qty_EA",
-        "type": "general",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "Qty_mt",
-        "type": "general",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "HeatNumber",
-        "type": "text",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "ManufacturerTestReport(MTR)No",
-        "type": "text",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "Manufacturer/Supplier",
-        "type": "text",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "PackiglistNo",
-        "type": "text",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "ShippingNotice",
-        "type": "text",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "PO/MR",
-        "type": "text",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "QualityControlManufactDossier(QCMD)",
-        "type": "text",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "Rev",
-        "type": "general",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "PAGENr",
-        "type": "text",
-        "unique": False,
-        "required": True,
-        "validate": None,
-    },
-    {
-        "name": "FileLink",
-        "type": "filelink",             # special type — opens file picker
-        "required": False,
-        "validate": None,
-    },
-]
+COLUMNS = [{'name': 'File Number',
+  'type': 'text',
+  'required': True,
+  'unique': True,
+  'validate': 'is_valid_fileNumber'},
+ {'name': 'ItemCode', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
+ {'name': 'Description', 'type': 'general', 'required': False, 'validate': None},
+ {'name': 'HeatNumber', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
+ {'name': 'ManufacturerTestReport(MTR)No',
+  'type': 'text',
+  'required': True,
+  'unique': False,
+  'validate': None},
+ {'name': 'Manufacturer/Supplier',
+  'type': 'text',
+  'required': True,
+  'unique': False,
+  'validate': None},
+ {'name': 'PackiglistNo', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
+ {'name': 'ShippingNotice', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
+ {'name': 'PO/MR', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
+ {'name': 'QualityControlManufactDossier(QCMD)',
+  'type': 'text',
+  'required': True,
+  'unique': False,
+  'validate': None},
+ {'name': 'Rev', 'type': 'general', 'required': True, 'unique': False, 'validate': None},
+ {'name': 'PAGENr', 'type': 'text', 'required': True, 'unique': False, 'validate': None},
+ {'name': 'FileLink', 'type': 'filelink', 'required': False, 'validate': None},
+ {'name': 'Qt_Test', 'type': 'text', 'required': False}]
+
+
+def save_columns_config(new_columns, config_file_path=None):
+    """Persist updated COLUMNS into config.py.
+
+    This rewrites only the COLUMNS assignment block and keeps the rest of
+    config.py untouched.
+    """
+    target_path = Path(config_file_path) if config_file_path else Path(__file__)
+    source = target_path.read_text(encoding="utf-8")
+
+    module = ast.parse(source)
+    columns_assign = None
+    for node in module.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "COLUMNS":
+                    columns_assign = node
+                    break
+        if columns_assign is not None:
+            break
+
+    if columns_assign is None:
+        raise ValueError("Could not find COLUMNS assignment in config.py")
+
+    lines = source.splitlines(keepends=True)
+    start_idx = columns_assign.lineno - 1
+    end_idx = columns_assign.end_lineno
+
+    formatted_columns = pprint.pformat(new_columns, width=100, sort_dicts=False)
+    replacement = f"COLUMNS = {formatted_columns}\n"
+
+    updated_source = "".join(lines[:start_idx]) + replacement + "".join(lines[end_idx:])
+    target_path.write_text(updated_source, encoding="utf-8")
 
 SEARCH_BY = [col["name"] for col in COLUMNS]  # should be able to search by any column
 
