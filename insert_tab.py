@@ -75,6 +75,33 @@ def _show_timed_error(message, elapsed_seconds):
     _show_error("Save", f"{message}\nElapsed: {elapsed_seconds:.3f}s")
 
 
+_BUTTON_IDLE_FG = ("#3B8ED0", "#1F6AA5")
+_BUTTON_IDLE_HOVER = ("#36719F", "#144870")
+_BUTTON_BUSY_FG = "#1F4D82"
+
+
+def _set_button_saving_state(button, is_saving, idle_text, busy_text="Saving...", refresh_widget=None):
+    if button is None:
+        return
+
+    if is_saving:
+        button.configure(
+            state="normal",
+            text=busy_text,
+            fg_color=_BUTTON_BUSY_FG,
+            hover_color=_BUTTON_BUSY_FG,
+        )
+        if refresh_widget is not None:
+            refresh_widget.update_idletasks()
+    else:
+        button.configure(
+            state="normal",
+            text=idle_text,
+            fg_color=_BUTTON_IDLE_FG,
+            hover_color=_BUTTON_IDLE_HOVER,
+        )
+
+
 _sheet_rows_cache = None
 _sheet_rows_cache_mtime = None
 
@@ -219,7 +246,25 @@ def build_insert_tab(tab):
         row_models = []
         removed_rows_stack = []
         undo_button = None
+        save_button = None
+        save_in_progress = {"value": False}
         drag_state = {"model": None}
+
+        def _set_save_button_saving_state(is_saving):
+            if save_button is None:
+                return
+            if is_saving:
+                save_in_progress["value"] = True
+                _set_button_saving_state(
+                    save_button,
+                    True,
+                    idle_text="Save",
+                    busy_text="Saving...",
+                    refresh_widget=panel,
+                )
+            else:
+                save_in_progress["value"] = False
+                _set_button_saving_state(save_button, False, idle_text="Save")
 
         def _update_undo_button_state():
             if undo_button is None:
@@ -372,6 +417,10 @@ def build_insert_tab(tab):
             _reflow_rows()
 
         def _save_customized_fields():
+            if save_in_progress["value"]:
+                return
+            _set_save_button_saving_state(True)
+
             old_columns_snapshot = [dict(c) for c in COLUMNS]
             new_columns = []
             seen_names = set()
@@ -382,12 +431,15 @@ def build_insert_tab(tab):
                 required = bool(row["required_var"].get())
 
                 if not name:
+                    _set_save_button_saving_state(False)
                     messagebox.showerror("Customize Fields", "Field name cannot be empty.")
                     return
                 if name in seen_names:
+                    _set_save_button_saving_state(False)
                     messagebox.showerror("Customize Fields", f"Duplicate field name: {name}")
                     return
                 if col_type not in field_types:
+                    _set_save_button_saving_state(False)
                     messagebox.showerror("Customize Fields", f"Invalid type for {name}: {col_type}")
                     return
 
@@ -414,12 +466,14 @@ def build_insert_tab(tab):
                 new_columns.append(col_def)
 
             if not new_columns:
+                _set_save_button_saving_state(False)
                 messagebox.showerror("Customize Fields", "At least one field is required.")
                 return
 
             has_item_code = any(col.get("name") == "ItemCode" for col in new_columns)
             has_description = any(col.get("name") == "Description" for col in new_columns)
             if has_description and not has_item_code:
+                _set_save_button_saving_state(False)
                 messagebox.showerror(
                     "Customize Fields",
                     "Description requires ItemCode so the auto-formula can keep working.",
@@ -429,6 +483,7 @@ def build_insert_tab(tab):
             try:
                 save_columns_config(new_columns)
             except Exception as exc:
+                _set_save_button_saving_state(False)
                 messagebox.showerror("Customize Fields", f"Could not save config.py:\n{exc}")
                 return
 
@@ -440,6 +495,7 @@ def build_insert_tab(tab):
                     save_columns_config(old_columns_snapshot)
                 except Exception:
                     pass
+                _set_save_button_saving_state(False)
                 messagebox.showerror(
                     "Customize Fields",
                     "Config was not applied because workbook schema sync failed.\n"
@@ -477,9 +533,8 @@ def build_insert_tab(tab):
         undo_button.pack(side="left", padx=(8, 0))
         _update_undo_button_state()
         CTkButton(buttons, text="Cancel", width=100, command=panel.destroy).pack(side="right")
-        CTkButton(buttons, text="Save", width=100, command=_save_customized_fields).pack(
-            side="right", padx=(0, 8)
-        )
+        save_button = CTkButton(buttons, text="Save", width=100, command=_save_customized_fields)
+        save_button.pack(side="right", padx=(0, 8))
 
     outer_container = CTkFrame(tab, fg_color="transparent")
     outer_container.pack(fill="both", expand=True, padx=12, pady=12)
@@ -624,8 +679,12 @@ def build_insert_tab(tab):
         corner_radius=BUTTON_CORNER_RADIUS,
         font=body_font,
     )
+    save_row_in_progress = {"value": False}
 
     def on_submit():
+        if save_row_in_progress["value"]:
+            return
+
         started_at = time.perf_counter()
         file_number = next_file_number_state["value"]
         if not file_number:
@@ -650,8 +709,15 @@ def build_insert_tab(tab):
                 return
             data[name] = value
 
-        # disable button so user can't double-submit while saving
-        save_button.configure(state="disabled", text="Saving…")
+        # keep button dark while saving; prevent double-submit with explicit guard.
+        save_row_in_progress["value"] = True
+        _set_button_saving_state(
+            save_button,
+            True,
+            idle_text="Save Row",
+            busy_text="Saving...",
+            refresh_widget=tab,
+        )
 
         def do_save():
             try:
@@ -666,7 +732,8 @@ def build_insert_tab(tab):
 
     def _on_save_success(file_number, started_at, elapsed_before_save, elapsed_after_save):
         elapsed_seconds = time.perf_counter() - started_at
-        save_button.configure(state="normal", text="Save Row")
+        save_row_in_progress["value"] = False
+        _set_button_saving_state(save_button, False, idle_text="Save Row")
         _show_timed_success(file_number, elapsed_seconds, elapsed_before_save, elapsed_after_save)
         try:
             next_file_number_state["value"] = get_next_fileNumber_from_value(file_number)
@@ -686,7 +753,8 @@ def build_insert_tab(tab):
 
     def _on_save_error(message, started_at):
         elapsed_seconds = time.perf_counter() - started_at
-        save_button.configure(state="normal", text="Save Row")
+        save_row_in_progress["value"] = False
+        _set_button_saving_state(save_button, False, idle_text="Save Row")
         _show_timed_error(message, elapsed_seconds)
 
     save_button.configure(command=on_submit)
