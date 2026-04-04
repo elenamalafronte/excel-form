@@ -99,6 +99,7 @@ def build_search_tab(tab):
     auto_fit_columns = True
     row_height_recalc_job = None
     max_header_lines = 3
+    sort_state = {"column": None, "ascending": True}
 
     def fit_columns_to_available_width(redraw=False):
         visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
@@ -466,13 +467,35 @@ def build_search_tab(tab):
         upload_pdf_button.configure(text="Upload PDF" if not file_link else "Replace PDF")
         _set_selected_actions_visible(True)
 
-    def on_search():
-        nonlocal current_rows
-        rows = search_rows(search_entry.get().strip(), search_by.get())
-        current_rows = rows
+    def _sort_key(row, column_name):
+        value = row.get(column_name)
+        if value is None:
+            return (2, "")
 
+        if isinstance(value, (int, float)):
+            return (0, float(value))
+
+        text = str(value).strip()
+        if text == "":
+            return (2, "")
+
+        try:
+            return (0, float(text))
+        except ValueError:
+            return (1, text.lower())
+
+    def _apply_sort_state():
+        nonlocal current_rows
+        col_name = sort_state.get("column")
+        if not col_name:
+            return
+
+        ascending = bool(sort_state.get("ascending", True))
+        current_rows = sorted(current_rows, key=lambda row: _sort_key(row, col_name), reverse=not ascending)
+
+    def _render_rows():
         data = []
-        for row in rows:
+        for row in current_rows:
             data.append([("" if row.get(c["name"]) is None else row.get(c["name"])) for c in COLUMNS])
 
         results_sheet.headers(columns, redraw=False)
@@ -500,6 +523,26 @@ def build_search_tab(tab):
         results_sheet.deselect("all", redraw=False)
         results_sheet.redraw()
         _update_selected_actions_ui()
+
+    def sort_by_column(col_name):
+        if col_name not in columns:
+            return
+
+        if sort_state.get("column") == col_name:
+            sort_state["ascending"] = not bool(sort_state.get("ascending", True))
+        else:
+            sort_state["column"] = col_name
+            sort_state["ascending"] = True
+
+        _apply_sort_state()
+        _render_rows()
+
+    def on_search():
+        nonlocal current_rows
+        rows = search_rows(search_entry.get().strip(), search_by.get())
+        current_rows = list(rows)
+        _apply_sort_state()
+        _render_rows()
 
     def refresh_with_feedback():
         if refresh_button is None:
@@ -571,8 +614,34 @@ def build_search_tab(tab):
         except Exception as exc:
             messagebox.showerror("Open Workbook", f"Could not open workbook:\n{exc}")
 
-    def handle_cell_click(event):
-        if results_sheet.identify_region(event) != "table":
+    def handle_double_click(event):
+        region = results_sheet.identify_region(event)
+
+        if region == "header":
+            displayed_col_index = results_sheet.identify_column(event)
+            if displayed_col_index is None:
+                return
+
+            # Ignore double-click near header borders to avoid conflicting with resize actions.
+            try:
+                col_positions = results_sheet.get_column_widths(canvas_positions=True)
+                if 0 <= displayed_col_index + 1 < len(col_positions):
+                    right_edge_x = col_positions[displayed_col_index + 1]
+                    if abs(int(event.x) - int(right_edge_x)) <= 6:
+                        return
+            except Exception:
+                pass
+
+            try:
+                data_col_index = results_sheet.displayed_column_to_data(displayed_col_index)
+            except Exception:
+                return
+
+            if 0 <= data_col_index < len(columns):
+                sort_by_column(columns[data_col_index])
+            return
+
+        if region != "table":
             return
 
         row_index = results_sheet.identify_row(event, exclude_index=True)
@@ -603,9 +672,12 @@ def build_search_tab(tab):
         except Exception as exc:
             messagebox.showerror("Open File", f"Could not open file link:\n{exc}")
 
-    results_sheet.bind("<Double-1>", handle_cell_click)
+    def handle_left_release(event):
+        _update_selected_actions_ui()
+
+    results_sheet.bind("<Double-1>", handle_double_click)
     results_sheet.bind("<Button-3>", on_header_right_click)
-    results_sheet.bind("<ButtonRelease-1>", lambda event: _update_selected_actions_ui())
+    results_sheet.bind("<ButtonRelease-1>", handle_left_release)
     results_sheet.bind("<KeyRelease>", lambda event: _update_selected_actions_ui())
 
     def on_user_column_resize(event=None):
@@ -636,6 +708,13 @@ def build_search_tab(tab):
 
     column_visibility_text = "Column Visibility"
     column_visibility_button_width = body_font.measure(column_visibility_text) + 26
+
+    CTkLabel(
+        toolbar,
+        text="Tip: double-click a column header to sort ascending/descending.",
+        font=CTkFont(size=max(BODY_FONT_SIZE - 1, 10)),
+        text_color="#767676",
+    ).pack(side="left", padx=(0, 10))
 
     CTkButton(
         toolbar,
