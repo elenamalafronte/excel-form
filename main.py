@@ -10,7 +10,15 @@ def build_app():
 
 	app = CTk()
 	app.title("Excel Form")
-	app.geometry("740x840")
+	window_width = 740
+	window_height = 840
+	screen_width = app.winfo_screenwidth()
+	screen_height = app.winfo_screenheight()
+
+	# Keep the app centered horizontally, but open higher on the display.
+	x = max((screen_width - window_width) // 2, 0)
+	y = max(min((screen_height - window_height) // 6, 120), 20)
+	app.geometry(f"{window_width}x{window_height}+{x}+{y}")
 
 	tabview = CTkTabview(app)
 	tabview.pack(fill="both", expand=True, padx=0, pady=10)
