@@ -30,6 +30,7 @@ from ui_style import (
     ROW_PADX,
     ROW_PADY,
     SECTION_TITLE_SIZE,
+    TABLE_FONT_SIZE,
     TABLE_HEADING_FONT_SIZE
 )
 
@@ -74,6 +75,7 @@ def build_search_tab(tab):
 
     columns = [c["name"] for c in COLUMNS]
     default_column_width = 138
+    max_auto_row_height = 96
     results_sheet = Sheet(
         container,
         headers=columns,
@@ -88,8 +90,10 @@ def build_search_tab(tab):
         header_align="center",
     )
     results_sheet.grid(row=2, column=0, columnspan=6, sticky="nsew", padx=ROW_PADX, pady=8)
-    results_sheet.set_options(auto_resize_rows=220, table_wrap="w", header_wrap="w")
+    # Keep native wrapping, but compute row heights ourselves for stable/minimum sizing.
+    results_sheet.set_options(auto_resize_rows=False, table_wrap="w", header_wrap="w")
     results_sheet.enable_bindings("all")
+    results_sheet.font(("Segoe UI", TABLE_FONT_SIZE, "normal"))
     results_sheet.header_font(("Segoe UI", TABLE_HEADING_FONT_SIZE, "bold"))
     results_sheet.set_all_column_widths(default_column_width, redraw=False)
     results_sheet.redraw()
@@ -162,8 +166,71 @@ def build_search_tab(tab):
         return True
 
     def recompute_row_heights(redraw=False):
-        # Recompute from text so rows can both grow and shrink after width changes.
-        results_sheet.row_height("all", "text", only_set_if_too_small=False, redraw=redraw)
+        # Compute the minimum needed height per row from wrapped visible text.
+        # This avoids oversized rows from generic auto-resize behavior.
+        visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
+        if not visible_indexes:
+            visible_indexes = list(range(len(columns)))
+
+        widths = results_sheet.get_column_widths()
+        cell_font = tkfont.Font(font=results_sheet.font())
+        line_height = max(cell_font.metrics("linespace"), 12)
+        min_row_height = max(24, line_height + 6)
+
+        def wrapped_line_count(text, max_width):
+            text = str(text or "")
+            if not text:
+                return 1
+            if max_width <= 8:
+                return max(1, text.count("\n") + 1)
+
+            lines = 0
+            for paragraph in text.split("\n"):
+                if paragraph == "":
+                    lines += 1
+                    continue
+
+                current = ""
+                for token in paragraph.split(" "):
+                    candidate = token if not current else f"{current} {token}"
+                    if cell_font.measure(candidate) <= max_width:
+                        current = candidate
+                        continue
+
+                    if current:
+                        lines += 1
+                        current = ""
+
+                    # Hard-break long tokens that exceed the cell width.
+                    piece = ""
+                    for ch in token:
+                        candidate_piece = f"{piece}{ch}"
+                        if cell_font.measure(candidate_piece) <= max_width:
+                            piece = candidate_piece
+                        else:
+                            lines += 1
+                            piece = ch
+                    current = piece
+
+                if current:
+                    lines += 1
+
+            return max(lines, 1)
+
+        for row_idx, row_data in enumerate(current_rows):
+            needed_lines = 1
+            for col_idx in visible_indexes:
+                col_name = columns[col_idx]
+                text = row_data.get(col_name, "")
+                col_width = int(widths[col_idx]) if col_idx < len(widths) else default_column_width
+                usable_width = max(10, col_width - 14)
+                needed_lines = max(needed_lines, wrapped_line_count(text, usable_width))
+
+            target_height = min(max_auto_row_height, max(min_row_height, (needed_lines * line_height) + 6))
+            results_sheet.row_height(row_idx, target_height, redraw=False)
+
+        if redraw:
+            results_sheet.redraw()
 
     def recompute_header_height():
         # Keep header compact: 1 line when possible, otherwise cap at 2 lines.
@@ -520,8 +587,8 @@ def build_search_tab(tab):
             )
         if auto_fit_columns:
             fit_columns_to_available_width(redraw=False)
-        recompute_row_heights(redraw=False)
         apply_display_columns()
+        recompute_row_heights(redraw=False)
         results_sheet.deselect("all", redraw=False)
         results_sheet.redraw()
         _update_selected_actions_ui()
@@ -700,7 +767,9 @@ def build_search_tab(tab):
         # Auto-fit columns only while user hasn't manually resized columns.
         if auto_fit_columns:
             fit_columns_to_available_width(redraw=True)
-        schedule_row_height_recalc()
+        recompute_header_height()
+        recompute_row_heights(redraw=True)
+        schedule_row_height_recalc(140)
         last_fitted_width = event.width
 
     results_sheet.bind("<Configure>", on_sheet_configure, add="+")
