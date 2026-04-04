@@ -1,5 +1,4 @@
 import os
-import textwrap
 from tkinter import BooleanVar, Menu, filedialog, messagebox
 from tkinter import font as tkfont
 
@@ -29,6 +28,7 @@ from ui_style import (
     ROW_PADX,
     ROW_PADY,
     SECTION_TITLE_SIZE,
+    TABLE_HEADING_FONT_SIZE
 )
 
 
@@ -88,7 +88,7 @@ def build_search_tab(tab):
     results_sheet.grid(row=2, column=0, columnspan=6, sticky="nsew", padx=ROW_PADX, pady=8)
     results_sheet.set_options(auto_resize_rows=220, table_wrap="w", header_wrap="w")
     results_sheet.enable_bindings("all")
-    results_sheet.header_font(("Segoe UI", max(BODY_FONT_SIZE, 12), "bold"))
+    results_sheet.header_font(("Segoe UI", TABLE_HEADING_FONT_SIZE, "bold"))
     results_sheet.set_all_column_widths(default_column_width, redraw=False)
     results_sheet.redraw()
 
@@ -98,6 +98,7 @@ def build_search_tab(tab):
     last_fitted_width = -1
     auto_fit_columns = True
     row_height_recalc_job = None
+    max_header_lines = 3
 
     def fit_columns_to_available_width(redraw=False):
         visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
@@ -162,33 +163,57 @@ def build_search_tab(tab):
         results_sheet.row_height("all", "text", only_set_if_too_small=False, redraw=redraw)
 
     def recompute_header_height():
-        # Set header height to exactly the max wrapped line count among visible headers.
+        # Keep header compact: 1 line when possible, otherwise cap at 2 lines.
         header_font = tkfont.Font(font=results_sheet.header_font())
-        char_px = max(header_font.measure("0"), 1)
         widths = results_sheet.get_column_widths()
 
-        max_lines = 1
+        def wrapped_line_count(text, max_width):
+            text = str(text or "")
+            if max_width <= 8 or not text:
+                return 1
+
+            lines = 0
+            for paragraph in text.split("\n"):
+                if paragraph == "":
+                    lines += 1
+                    continue
+
+                current = ""
+                for token in paragraph.split(" "):
+                    candidate = token if not current else f"{current} {token}"
+                    if header_font.measure(candidate) <= max_width:
+                        current = candidate
+                        continue
+
+                    if current:
+                        lines += 1
+                        current = ""
+
+                    # Hard-break very long tokens that exceed the cell width.
+                    piece = ""
+                    for ch in token:
+                        candidate_piece = f"{piece}{ch}"
+                        if header_font.measure(candidate_piece) <= max_width:
+                            piece = candidate_piece
+                        else:
+                            lines += 1
+                            piece = ch
+                    current = piece
+
+                if current:
+                    lines += 1
+
+            return max(lines, 1)
+
+        needed_lines = 1
         for idx, col_name in enumerate(columns):
             if col_name in hidden_columns:
                 continue
-
             col_width = int(widths[idx]) if idx < len(widths) else default_column_width
-            usable_width = max(col_width - 14, 10)
-            chars_per_line = max(1, int(usable_width / char_px))
+            usable_width = max(10, col_width - 14)
+            needed_lines = max(needed_lines, wrapped_line_count(col_name, usable_width))
 
-            line_count = 0
-            for part in str(col_name).splitlines() or [""]:
-                wrapped = textwrap.wrap(
-                    part,
-                    width=chars_per_line,
-                    break_long_words=True,
-                    break_on_hyphens=False,
-                ) or [""]
-                line_count += len(wrapped)
-
-            max_lines = max(max_lines, line_count)
-
-        results_sheet.set_header_height_lines(max_lines, redraw=False)
+        results_sheet.set_header_height_lines(min(max(needed_lines, 1), 2), redraw=False)
 
     def schedule_row_height_recalc(delay_ms=80):
         nonlocal row_height_recalc_job
@@ -595,11 +620,15 @@ def build_search_tab(tab):
         nonlocal last_fitted_width
         if event.width <= 20:
             return
-        # Re-fit when table viewport width changes so columns always fill container width.
-        if auto_fit_columns and abs(event.width - last_fitted_width) >= 3:
+        if abs(event.width - last_fitted_width) < 3:
+            return
+
+        # Always recompute wrapped heights when viewport width changes.
+        # Auto-fit columns only while user hasn't manually resized columns.
+        if auto_fit_columns:
             fit_columns_to_available_width(redraw=True)
-            schedule_row_height_recalc()
-            last_fitted_width = event.width
+        schedule_row_height_recalc()
+        last_fitted_width = event.width
 
     results_sheet.bind("<Configure>", on_sheet_configure, add="+")
 
