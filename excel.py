@@ -8,6 +8,7 @@ from openpyxl import Workbook, load_workbook
 
 from config import (
     COLUMNS,
+    build_description_formula,
     EXCEL_FILE,
     FILE_NUMBER_PATTERN,
     SEARCH_BY,
@@ -100,7 +101,14 @@ def _find_sheet_zip_path(file_path, sheet_name):
     if not target_match:
         raise ValueError(f"Could not resolve relationship {r_id}")
     target = target_match.group(1)
-    return f"xl/{target}" if not target.startswith("/") else target
+
+    # Normalize relationship target to actual ZIP member format.
+    # Some workbooks store absolute-like targets such as /xl/worksheets/sheet2.xml
+    # while ZIP members are stored without leading slash.
+    normalized = target.replace("\\", "/").lstrip("/")
+    if not normalized.startswith("xl/"):
+        normalized = f"xl/{normalized}"
+    return normalized
 
 
 def _build_row_xml(row_idx, row_values, cached_values=None):
@@ -150,10 +158,18 @@ def _zip_append_row(file_path, row_values, new_row_idx, cached_values=None):
     with zipfile.ZipFile(file_path, "r") as z:
         sheet_str = z.read(sheet_zip_path).decode("utf-8")
 
-    if "</sheetData>" not in sheet_str:
-        raise ValueError(f"</sheetData> not found in {sheet_zip_path}")
-
-    sheet_str = sheet_str.replace("</sheetData>", f"{new_row_xml}</sheetData>", 1)
+    if "</sheetData>" in sheet_str:
+        sheet_str = sheet_str.replace("</sheetData>", f"{new_row_xml}</sheetData>", 1)
+    elif re.search(r"<sheetData\s*/>", sheet_str):
+        # Empty sheets can use a self-closing sheetData tag.
+        sheet_str = re.sub(
+            r"<sheetData\s*/>",
+            f"<sheetData>{new_row_xml}</sheetData>",
+            sheet_str,
+            count=1,
+        )
+    else:
+        raise ValueError(f"sheetData section not found in {sheet_zip_path}")
     sheet_str = re.sub(
         r'(<dimension ref="[A-Z]+\d+:)([A-Z]+)(\d+)(")',
         lambda m: f"{m.group(1)}{m.group(2)}{new_row_idx}{m.group(4)}",
@@ -295,6 +311,19 @@ def _get_desc_index(path: Path) -> dict:
     return _desc_index_cache
 
 
+def get_description_for_itemcode(item_code: str) -> str:
+    """Return description for an ItemCode from CREXPD01 index, if available."""
+    path = Path(EXCEL_FILE)
+    if not path.exists() or not item_code:
+        return ""
+
+    desc_index = _get_desc_index(path)
+    if not desc_index:
+        return ""
+
+    return desc_index.get(str(item_code).strip().upper(), "") or ""
+
+
 def load_sheet():
     """Return worksheet rows as list[dict], excluding the header row.
 
@@ -393,9 +422,8 @@ def append_row(data: dict):
         raise FileNotFoundError(f"Workbook not found: {EXCEL_FILE}")
 
     # Phase 1 – find true last data row (Heat Number sheet only).
-    # desc_index is fetched from the module-level mtime cache; no extra I/O if
-    # the file hasn't changed since the last search.
     last_data_row = 1
+    desc_index = {}
     try:
         wb_ro = load_workbook(file_path, read_only=True, data_only=True)
         ws_ro = _get_form_sheet_for_read(wb_ro)
@@ -407,13 +435,37 @@ def append_row(data: dict):
     except Exception:
         pass
 
+    # Build description index once for this append. This allows writing a
+    # cached formula result so Search can display Description immediately.
+    desc_index = _get_desc_index(file_path)
+
     # Phase 2 – ZIP surgery: rewrite only the Heat Number sheet XML
     new_row_idx = last_data_row + 1
 
     row_values = [data.get(col["name"], "") for col in COLUMNS]
 
+    desc_col_idx = next(
+        (i for i, c in enumerate(COLUMNS) if c["name"] == "Description"), None
+    )
+    item_code_col_idx = next(
+        (i for i, c in enumerate(COLUMNS) if c["name"] == "ItemCode"), None
+    )
+
+    cached_values = {}
+    if desc_col_idx is not None and item_code_col_idx is not None:
+        item_code_col_letter = _col_idx_to_letter(item_code_col_idx)
+        row_values[desc_col_idx] = build_description_formula(
+            f"{item_code_col_letter}{new_row_idx}", "CREXPD01"
+        )
+
+        item_code = str(data.get("ItemCode", "")).strip().upper()
+        if item_code and desc_index:
+            description = desc_index.get(item_code, "")
+            if description:
+                cached_values[desc_col_idx] = description
+
     try:
-        _zip_append_row(file_path, row_values, new_row_idx)
+        _zip_append_row(file_path, row_values, new_row_idx, cached_values)
     except PermissionError as exc:
         raise PermissionError(
             f"Cannot save workbook. Close '{EXCEL_FILE}' in Excel and try again."
