@@ -85,7 +85,7 @@
  [],
  False,
  False,
- 1775387182,
+ 1775404805,
  [('runw.exe',
    'C:\\Users\\Elena '
    'Malafronte\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',
