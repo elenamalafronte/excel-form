@@ -157,6 +157,7 @@ def build_search_tab(tab):
     row_height_recalc_token = {"value": 0}
     max_header_lines = 3
     sort_state = {"column": None, "ascending": True}
+    highlighted_row = {"value": None}
 
     def fit_columns_to_available_width(redraw=False):
         visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
@@ -646,9 +647,30 @@ def build_search_tab(tab):
             selected_actions.grid_remove()
 
     def _highlight_selected_row_and_cell():
-        # Native selection styling is configured once on the table and avoids
-        # expensive per-click highlighting work.
-        return
+        row_index = get_selected_row_index()
+        prev_row = highlighted_row["value"]
+        try:
+            if isinstance(prev_row, int) and (row_index is None or prev_row != row_index):
+                results_sheet.dehighlight_rows(prev_row, redraw=False)
+
+            if row_index is None:
+                highlighted_row["value"] = None
+                results_sheet.redraw()
+                return
+
+            # Keep native selected-cell behavior and add a row-wide highlight.
+            if row_index != prev_row:
+                results_sheet.highlight_rows(
+                    row_index,
+                    bg=_ROW_SELECTED_BG,
+                    fg=_ROW_SELECTED_FG,
+                    redraw=False,
+                )
+                highlighted_row["value"] = row_index
+                results_sheet.redraw()
+        except Exception:
+            # Keep table usable even if highlight API is not available.
+            highlighted_row["value"] = None
 
     def _update_selected_actions_ui():
         if selected_info_label is None or upload_pdf_button is None or delete_row_button is None:
@@ -707,6 +729,8 @@ def build_search_tab(tab):
         data = []
         for row in current_rows:
             data.append([("" if row.get(c["name"]) is None else row.get(c["name"])) for c in COLUMNS])
+
+        highlighted_row["value"] = None
 
         results_sheet.headers(columns, redraw=False)
         recompute_header_height()
