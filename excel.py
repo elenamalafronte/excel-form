@@ -322,12 +322,28 @@ def _build_description_index_fallback(file_path: Path) -> dict:
 # so saving a form row does not trigger a full source-sheet rescan.
 _desc_index_cache: dict = {}
 _desc_index_cache_key: tuple[str, str] | None = None
+_form_rows_cache: list[dict] | None = None
+_form_rows_cache_file_sig: tuple[int, int] | None = None
 
 
 def _invalidate_desc_index_cache() -> None:
     global _desc_index_cache, _desc_index_cache_key
     _desc_index_cache = {}
     _desc_index_cache_key = None
+
+
+def _get_file_signature(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+        return (int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        return None
+
+
+def _invalidate_form_rows_cache() -> None:
+    global _form_rows_cache, _form_rows_cache_file_sig
+    _form_rows_cache = None
+    _form_rows_cache_file_sig = None
 
 
 def _get_desc_index(path: Path) -> dict:
@@ -371,6 +387,12 @@ def load_sheet():
     path = Path(cfg.EXCEL_FILE)
     if not path.exists():
         return []
+
+    global _form_rows_cache, _form_rows_cache_file_sig
+
+    file_sig = _get_file_signature(path)
+    if file_sig is not None and _form_rows_cache is not None and file_sig == _form_rows_cache_file_sig:
+        return list(_form_rows_cache)
 
     # Build (or reuse) the description index BEFORE opening the Heat Number
     # sheet.  Both sheets live in the same ZIP, and opening one sheet's XML
@@ -423,6 +445,8 @@ def load_sheet():
                 break
 
     wb.close()
+    _form_rows_cache = rows
+    _form_rows_cache_file_sig = file_sig
     return rows
 
 
@@ -458,6 +482,7 @@ def recalc_workbook() -> None:
         return
     _excel_recalc_and_save(file_path)
     _invalidate_desc_index_cache()
+    _invalidate_form_rows_cache()
 
 
 def append_row(data: dict):
@@ -526,6 +551,8 @@ def append_row(data: dict):
         raise PermissionError(
             f"Cannot save workbook. Close '{cfg.EXCEL_FILE}' in Excel and try again."
         ) from exc
+
+    _invalidate_form_rows_cache()
 
     # Return the physical worksheet row number that was written.
     return new_row_idx
@@ -607,6 +634,7 @@ def sync_form_sheet_columns(old_columns, new_columns):
     # Schema sync can change formulas/references; reset in-memory indexes so
     # Insert/Search rebuild their cached lookups against the new workbook shape.
     _invalidate_desc_index_cache()
+    _invalidate_form_rows_cache()
 
 
 def update_file_link(file_number: str, file_link: str) -> bool:
@@ -655,6 +683,7 @@ def update_file_link(file_number: str, file_link: str) -> bool:
 
         if updated:
             wb.save(file_path)
+            _invalidate_form_rows_cache()
         return updated
     finally:
         wb.close()

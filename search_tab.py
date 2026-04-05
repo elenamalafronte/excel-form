@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from tkinter import BooleanVar, Menu, filedialog, messagebox
 from tkinter import font as tkfont
 
@@ -44,6 +45,7 @@ _ROW_SELECTED_FG = "#0D1B2A"
 _CELL_SELECTED_BG = "#6E9FEA"
 _CELL_SELECTED_FG = "#FFFFFF"
 _MAX_CUSTOM_HIGHLIGHT_ROWS = 1200
+_MAX_WRAP_RECALC_ROWS = 800
 
 
 def _set_button_loading_state(button, is_loading, idle_text, busy_text, refresh_widget=None):
@@ -136,6 +138,7 @@ def build_search_tab(tab):
     current_rows = []
     search_request_id = {"value": 0}
     search_in_progress = {"value": False}
+    search_started_at = {"value": None}
     last_fitted_width = -1
     auto_fit_columns = True
     row_height_recalc_job = None
@@ -201,6 +204,13 @@ def build_search_tab(tab):
         return True
 
     def recompute_row_heights(redraw=False):
+        # Measuring wrapped text for thousands of rows can freeze the UI.
+        # Keep default row heights for large result sets.
+        if len(current_rows) > _MAX_WRAP_RECALC_ROWS:
+            if redraw:
+                results_sheet.redraw()
+            return
+
         # Compute the minimum needed height per row from wrapped visible text.
         # This avoids oversized rows from generic auto-resize behavior.
         visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
@@ -322,6 +332,9 @@ def build_search_tab(tab):
 
     def schedule_row_height_recalc(delay_ms=80):
         nonlocal row_height_recalc_job
+        if len(current_rows) > _MAX_WRAP_RECALC_ROWS:
+            return
+
         if row_height_recalc_job is not None:
             tab.after_cancel(row_height_recalc_job)
 
@@ -524,6 +537,12 @@ def build_search_tab(tab):
 
     refresh_button = None
     search_button = None
+    search_status_label = None
+
+    def _set_search_status(text, color="#767676"):
+        if search_status_label is None:
+            return
+        search_status_label.configure(text=text, text_color=color)
 
     file_number_col_idx = columns.index("File Number") if "File Number" in columns else -1
     file_link_col_idx = columns.index("FileLink") if "FileLink" in columns else -1
@@ -642,6 +661,9 @@ def build_search_tab(tab):
         for row in current_rows:
             data.append([("" if row.get(c["name"]) is None else row.get(c["name"])) for c in COLUMNS])
 
+        large_result_set = len(current_rows) > _MAX_WRAP_RECALC_ROWS
+        results_sheet.set_options(table_wrap="n" if large_result_set else "w")
+
         results_sheet.headers(columns, redraw=False)
         recompute_header_height()
         results_sheet.set_sheet_data(
@@ -663,13 +685,17 @@ def build_search_tab(tab):
         if auto_fit_columns:
             fit_columns_to_available_width(redraw=False)
         apply_display_columns()
-        recompute_row_heights(redraw=False)
+        if not large_result_set:
+            recompute_row_heights(redraw=False)
         results_sheet.deselect("all", redraw=False)
         results_sheet.redraw()
         _update_selected_actions_ui()
 
     def _set_search_loading(is_loading):
         search_in_progress["value"] = is_loading
+
+        if is_loading:
+            _set_search_status("Loading rows...", "#4E7DA8")
 
         try:
             search_entry.configure(state="disabled" if is_loading else "normal")
@@ -714,6 +740,7 @@ def build_search_tab(tab):
         search_column = search_by.get()
         search_request_id["value"] += 1
         request_id = search_request_id["value"]
+        search_started_at["value"] = time.perf_counter()
         _set_search_loading(True)
 
         def _do_search():
@@ -735,12 +762,26 @@ def build_search_tab(tab):
             _set_search_loading(False)
 
             if error_msg:
+                _set_search_status("Load failed", "#B23A48")
                 messagebox.showerror("Search", f"Could not load rows:\n{error_msg}")
                 return
 
             current_rows = list(rows)
             _apply_sort_state()
             _render_rows()
+
+            elapsed = 0.0
+            started = search_started_at.get("value")
+            if started is not None:
+                elapsed = max(0.0, time.perf_counter() - started)
+
+            if search_value:
+                if current_rows:
+                    _set_search_status(f"Found {len(current_rows)} rows in {elapsed:.1f}s", "#2E8B57")
+                else:
+                    _set_search_status(f"No matches ({elapsed:.1f}s)", "#B27A2F")
+            else:
+                _set_search_status(f"Loaded {len(current_rows)} rows in {elapsed:.1f}s", "#2E8B57")
 
         threading.Thread(target=_do_search, daemon=True).start()
 
@@ -921,11 +962,18 @@ def build_search_tab(tab):
         if auto_fit_columns:
             fit_columns_to_available_width(redraw=True)
         recompute_header_height()
-        recompute_row_heights(redraw=True)
-        schedule_row_height_recalc(140)
+        if len(current_rows) <= _MAX_WRAP_RECALC_ROWS:
+            recompute_row_heights(redraw=True)
+            schedule_row_height_recalc(140)
+        else:
+            results_sheet.redraw()
         last_fitted_width = event.width
 
     results_sheet.bind("<Configure>", on_sheet_configure, add="+")
+
+    # Auto-load rows when Search tab is created, but do it after first paint
+    # so the tab opens immediately and loading remains non-blocking.
+    tab.after(120, on_search)
 
     column_visibility_text = "Column Visibility"
     column_visibility_button_width = body_font.measure(column_visibility_text) + 26
@@ -971,6 +1019,15 @@ def build_search_tab(tab):
     refresh_button.grid(
         row=4, column=0, sticky="w", padx=ROW_PADX, pady=10
     )
+    search_status_label = CTkLabel(
+        container,
+        text="Ready",
+        font=CTkFont(size=max(BODY_FONT_SIZE - 1, 10), weight="bold"),
+        text_color="#767676",
+        anchor="w",
+    )
+    search_status_label.grid(row=5, column=0, sticky="w", padx=ROW_PADX, pady=(0, 10))
+
     CTkButton(
         container,
         text="Open Workbook",
