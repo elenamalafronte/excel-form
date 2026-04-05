@@ -20,7 +20,7 @@ from customtkinter import (
 from tksheet import Sheet
 
 from config import COLUMNS, SEARCH_BY
-from excel import recalc_workbook, search_rows, update_file_link
+from excel import delete_row_by_file_number, recalc_workbook, search_rows, update_file_link
 from ui_style import (
     BODY_FONT_SIZE,
     BUTTON_CORNER_RADIUS,
@@ -44,8 +44,10 @@ _ROW_SELECTED_BG = "#DCEBFF"
 _ROW_SELECTED_FG = "#0D1B2A"
 _CELL_SELECTED_BG = "#6E9FEA"
 _CELL_SELECTED_FG = "#FFFFFF"
-_MAX_CUSTOM_HIGHLIGHT_ROWS = 1200
-_MAX_WRAP_RECALC_ROWS = 800
+_ROW_HEIGHT_ASYNC_THRESHOLD = 250
+_ROW_HEIGHT_BATCH_SIZE = 120
+_ROW_HEIGHT_RECALC_MAX_ROWS = 900
+_FAST_WRAP_MAX_LINES = 3
 
 
 def _set_button_loading_state(button, is_loading, idle_text, busy_text, refresh_widget=None):
@@ -127,6 +129,16 @@ def build_search_tab(tab):
     results_sheet.grid(row=2, column=0, columnspan=6, sticky="nsew", padx=ROW_PADX, pady=8)
     # Keep native wrapping, but compute row heights ourselves for stable/minimum sizing.
     results_sheet.set_options(auto_resize_rows=False, table_wrap="w", header_wrap="w")
+    try:
+        # Use native tksheet selection styling (fast even on large tables).
+        results_sheet.set_options(
+            selected_rows_bg=_ROW_SELECTED_BG,
+            selected_rows_fg=_ROW_SELECTED_FG,
+            selected_cells_bg=_CELL_SELECTED_BG,
+            selected_cells_fg=_CELL_SELECTED_FG,
+        )
+    except Exception:
+        pass
     results_sheet.enable_bindings("all")
     results_sheet.font(("Segoe UI", TABLE_FONT_SIZE, "normal"))
     results_sheet.header_font(("Segoe UI", TABLE_HEADING_FONT_SIZE, "bold"))
@@ -142,6 +154,7 @@ def build_search_tab(tab):
     last_fitted_width = -1
     auto_fit_columns = True
     row_height_recalc_job = None
+    row_height_recalc_token = {"value": 0}
     max_header_lines = 3
     sort_state = {"column": None, "ascending": True}
 
@@ -203,14 +216,7 @@ def build_search_tab(tab):
             results_sheet.redraw()
         return True
 
-    def recompute_row_heights(redraw=False):
-        # Measuring wrapped text for thousands of rows can freeze the UI.
-        # Keep default row heights for large result sets.
-        if len(current_rows) > _MAX_WRAP_RECALC_ROWS:
-            if redraw:
-                results_sheet.redraw()
-            return
-
+    def recompute_row_heights(redraw=False, start_row=0, end_row=None):
         # Compute the minimum needed height per row from wrapped visible text.
         # This avoids oversized rows from generic auto-resize behavior.
         visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
@@ -262,7 +268,14 @@ def build_search_tab(tab):
 
             return max(lines, 1)
 
-        for row_idx, row_data in enumerate(current_rows):
+        total_rows = len(current_rows)
+        if end_row is None:
+            end_row = total_rows
+        start_row = max(0, min(start_row, total_rows))
+        end_row = max(start_row, min(end_row, total_rows))
+
+        for row_idx in range(start_row, end_row):
+            row_data = current_rows[row_idx]
             needed_lines = 1
             for col_idx in visible_indexes:
                 col_name = columns[col_idx]
@@ -276,6 +289,54 @@ def build_search_tab(tab):
 
         if redraw:
             results_sheet.redraw()
+
+    def recompute_row_heights_fast(redraw=False):
+        """Approximate wrapped heights for large tables with minimal CPU cost."""
+        if not current_rows:
+            if redraw:
+                results_sheet.redraw()
+            return
+
+        try:
+            desc_idx = columns.index("Description")
+        except ValueError:
+            if redraw:
+                results_sheet.redraw()
+            return
+
+        widths = results_sheet.get_column_widths()
+        desc_width = int(widths[desc_idx]) if desc_idx < len(widths) else default_column_width
+        usable_width = max(12, desc_width - 14)
+
+        # Cheap text width approximation: ~7px per character for Segoe UI table font.
+        chars_per_line = max(10, int(usable_width / 7))
+        line_height = max(TABLE_FONT_SIZE + 6, 14)
+        min_row_height = max(24, line_height + 6)
+
+        for row_idx, row_data in enumerate(current_rows):
+            text = str(row_data.get("Description", "") or "")
+            if not text:
+                needed_lines = 1
+            else:
+                explicit_lines = max(1, text.count("\n") + 1)
+                approx_lines = max(1, (len(text) + chars_per_line - 1) // chars_per_line)
+                needed_lines = min(_FAST_WRAP_MAX_LINES, max(explicit_lines, approx_lines))
+
+            target_height = min(max_auto_row_height, max(min_row_height, (needed_lines * line_height) + 6))
+            results_sheet.row_height(row_idx, target_height, redraw=False)
+
+        if redraw:
+            results_sheet.redraw()
+
+    def _cancel_row_height_recalc():
+        nonlocal row_height_recalc_job
+        if row_height_recalc_job is not None:
+            try:
+                tab.after_cancel(row_height_recalc_job)
+            except Exception:
+                pass
+            row_height_recalc_job = None
+        row_height_recalc_token["value"] += 1
 
     def recompute_header_height():
         # Keep header compact: 1 line when possible, otherwise cap at 2 lines.
@@ -332,17 +393,35 @@ def build_search_tab(tab):
 
     def schedule_row_height_recalc(delay_ms=80):
         nonlocal row_height_recalc_job
-        if len(current_rows) > _MAX_WRAP_RECALC_ROWS:
+        if len(current_rows) > _ROW_HEIGHT_RECALC_MAX_ROWS:
             return
 
-        if row_height_recalc_job is not None:
-            tab.after_cancel(row_height_recalc_job)
+        _cancel_row_height_recalc()
+        token = row_height_recalc_token["value"]
+
+        def _run_batch(start_idx):
+            nonlocal row_height_recalc_job
+            if token != row_height_recalc_token["value"]:
+                return
+
+            recompute_header_height()
+            end_idx = min(start_idx + _ROW_HEIGHT_BATCH_SIZE, len(current_rows))
+            recompute_row_heights(redraw=False, start_row=start_idx, end_row=end_idx)
+            results_sheet.redraw()
+
+            if end_idx < len(current_rows):
+                row_height_recalc_job = tab.after(1, _run_batch, end_idx)
+            else:
+                row_height_recalc_job = None
 
         def _run():
             nonlocal row_height_recalc_job
-            row_height_recalc_job = None
-            recompute_header_height()
-            recompute_row_heights(redraw=True)
+            if len(current_rows) <= _ROW_HEIGHT_ASYNC_THRESHOLD:
+                recompute_header_height()
+                recompute_row_heights(redraw=True)
+                row_height_recalc_job = None
+                return
+            _run_batch(0)
 
         row_height_recalc_job = tab.after(delay_ms, _run)
 
@@ -357,7 +436,6 @@ def build_search_tab(tab):
             )
             if auto_fit_columns:
                 fit_columns_to_available_width(redraw=True)
-            schedule_row_height_recalc()
             return
 
         visible_indexes = [idx for idx, col_name in enumerate(columns) if col_name not in hidden_columns]
@@ -370,7 +448,6 @@ def build_search_tab(tab):
         )
         if auto_fit_columns:
             fit_columns_to_available_width(redraw=True)
-        schedule_row_height_recalc()
 
     def get_selected_row_index():
         selected_rows = results_sheet.get_selected_rows(get_cells_as_rows=True)
@@ -549,6 +626,7 @@ def build_search_tab(tab):
 
     selected_info_label = None
     upload_pdf_button = None
+    delete_row_button = None
     selected_actions = CTkFrame(container, fg_color="transparent")
     selected_actions.grid(row=4, column=1, columnspan=3, sticky="w", padx=ROW_PADX, pady=10)
     selected_actions.grid_remove()
@@ -568,44 +646,12 @@ def build_search_tab(tab):
             selected_actions.grid_remove()
 
     def _highlight_selected_row_and_cell():
-        # Full dehighlight/highlight on every click is expensive on very large
-        # tables and can lock the UI. Fall back to native tksheet selection.
-        if len(current_rows) > _MAX_CUSTOM_HIGHLIGHT_ROWS:
-            return
-
-        row_index = get_selected_row_index()
-        selected = results_sheet.get_currently_selected()
-        col_index = None
-        if selected and len(selected) >= 2 and isinstance(selected[1], int):
-            col_index = selected[1]
-
-        try:
-            results_sheet.dehighlight_rows("all", redraw=False)
-            results_sheet.dehighlight_cells(all_=True, redraw=False)
-
-            if row_index is not None:
-                results_sheet.highlight_rows(
-                    row_index,
-                    bg=_ROW_SELECTED_BG,
-                    fg=_ROW_SELECTED_FG,
-                    redraw=False,
-                )
-                if isinstance(col_index, int) and col_index >= 0:
-                    results_sheet.highlight_cells(
-                        row=row_index,
-                        column=col_index,
-                        bg=_CELL_SELECTED_BG,
-                        fg=_CELL_SELECTED_FG,
-                        redraw=False,
-                    )
-
-            results_sheet.redraw()
-        except Exception:
-            # Keep selection behavior usable even if highlight styling fails.
-            pass
+        # Native selection styling is configured once on the table and avoids
+        # expensive per-click highlighting work.
+        return
 
     def _update_selected_actions_ui():
-        if selected_info_label is None or upload_pdf_button is None:
+        if selected_info_label is None or upload_pdf_button is None or delete_row_button is None:
             return
 
         _highlight_selected_row_and_cell()
@@ -628,6 +674,7 @@ def build_search_tab(tab):
 
         selected_info_label.configure(text=f"Selected: {file_number}")
         upload_pdf_button.configure(text="Upload PDF" if not file_link else "Replace PDF")
+        delete_row_button.configure(state="normal")
         _set_selected_actions_visible(True)
 
     def _sort_key(row, column_name):
@@ -661,9 +708,6 @@ def build_search_tab(tab):
         for row in current_rows:
             data.append([("" if row.get(c["name"]) is None else row.get(c["name"])) for c in COLUMNS])
 
-        large_result_set = len(current_rows) > _MAX_WRAP_RECALC_ROWS
-        results_sheet.set_options(table_wrap="n" if large_result_set else "w")
-
         results_sheet.headers(columns, redraw=False)
         recompute_header_height()
         results_sheet.set_sheet_data(
@@ -685,8 +729,14 @@ def build_search_tab(tab):
         if auto_fit_columns:
             fit_columns_to_available_width(redraw=False)
         apply_display_columns()
-        if not large_result_set:
+        _cancel_row_height_recalc()
+        if len(current_rows) <= _ROW_HEIGHT_ASYNC_THRESHOLD:
             recompute_row_heights(redraw=False)
+        elif len(current_rows) <= _ROW_HEIGHT_RECALC_MAX_ROWS:
+            schedule_row_height_recalc(40)
+        else:
+            # Large data mode: keep responsiveness with approximate row heights.
+            recompute_row_heights_fast(redraw=False)
         results_sheet.deselect("all", redraw=False)
         results_sheet.redraw()
         _update_selected_actions_ui()
@@ -866,6 +916,64 @@ def build_search_tab(tab):
         upload_thread = threading.Thread(target=do_upload, daemon=True)
         upload_thread.start()
 
+    def delete_selected_row():
+        row_index = get_selected_row_index()
+        values = _selected_row_values()
+        if row_index is None or not values or file_number_col_idx < 0:
+            messagebox.showwarning("Delete Row", "Select a row first.")
+            return
+
+        file_number = str(values[file_number_col_idx] if file_number_col_idx < len(values) else "").strip()
+        if not file_number:
+            messagebox.showwarning("Delete Row", "Selected row has no File Number.")
+            return
+
+        confirm = messagebox.askyesno(
+            "Delete Row",
+            f"Delete row '{file_number}' from workbook?\n\nThis action cannot be undone.",
+            icon="warning",
+        )
+        if not confirm:
+            return
+
+        if upload_pdf_button is not None:
+            upload_pdf_button.configure(state="disabled")
+        if delete_row_button is not None:
+            delete_row_button.configure(state="disabled", text="Deleting...")
+        _set_search_status(f"Deleting {file_number}...", "#4E7DA8")
+
+        def do_delete():
+            error_msg = None
+            deleted = False
+            try:
+                deleted = delete_row_by_file_number(file_number)
+            except Exception as exc:
+                error_msg = f"Could not delete row:\n{exc}"
+            finally:
+                container.after(0, _finish_delete, file_number, error_msg, deleted)
+
+        def _finish_delete(file_number_value, error_msg, deleted):
+            if upload_pdf_button is not None:
+                upload_pdf_button.configure(state="normal")
+            if delete_row_button is not None:
+                delete_row_button.configure(state="normal", text="Delete Row")
+
+            if error_msg:
+                _set_search_status("Delete failed", "#B23A48")
+                messagebox.showerror("Delete Row", error_msg)
+                return
+
+            if not deleted:
+                _set_search_status("Row not found", "#B27A2F")
+                messagebox.showwarning("Delete Row", "Could not find the selected row in workbook.")
+                return
+
+            _set_search_status(f"Deleted {file_number_value}", "#2E8B57")
+            _set_selected_actions_visible(False)
+            on_search()
+
+        threading.Thread(target=do_delete, daemon=True).start()
+
     tab.refresh_search = on_search
     tab.refresh_search_with_recalc = refresh_after_recalc
     tab.auto_refresh_search = lambda: on_search()
@@ -962,11 +1070,13 @@ def build_search_tab(tab):
         if auto_fit_columns:
             fit_columns_to_available_width(redraw=True)
         recompute_header_height()
-        if len(current_rows) <= _MAX_WRAP_RECALC_ROWS:
+        _cancel_row_height_recalc()
+        if len(current_rows) <= _ROW_HEIGHT_ASYNC_THRESHOLD:
             recompute_row_heights(redraw=True)
-            schedule_row_height_recalc(140)
+        elif len(current_rows) <= _ROW_HEIGHT_RECALC_MAX_ROWS:
+            schedule_row_height_recalc(120)
         else:
-            results_sheet.redraw()
+            recompute_row_heights_fast(redraw=True)
         last_fitted_width = event.width
 
     results_sheet.bind("<Configure>", on_sheet_configure, add="+")
@@ -1052,6 +1162,17 @@ def build_search_tab(tab):
         font=body_font,
     )
     upload_pdf_button.pack(side="left")
+    delete_row_button = CTkButton(
+        selected_actions,
+        text="Delete Row",
+        command=delete_selected_row,
+        height=BUTTON_HEIGHT,
+        corner_radius=BUTTON_CORNER_RADIUS,
+        font=body_font,
+        fg_color="#B23A48",
+        hover_color="#8F2E39",
+    )
+    delete_row_button.pack(side="left", padx=(8, 0))
 
     container.grid_columnconfigure(1, weight=1, minsize=220)
     container.grid_columnconfigure(3, weight=1, minsize=170)

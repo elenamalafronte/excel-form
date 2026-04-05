@@ -235,6 +235,53 @@ def _zip_append_row(file_path, row_values, new_row_idx, cached_values=None):
         raise
 
 
+def _zip_clear_row(file_path: Path, row_idx: int) -> bool:
+    """Clear one worksheet row by rewriting only the Heat Number sheet XML.
+
+    This keeps row indexes stable and avoids full workbook re-save overhead.
+    """
+    sheet_zip_path = _find_sheet_zip_path(file_path, cfg.FORM_SHEET_NAME)
+
+    with zipfile.ZipFile(file_path, "r") as z:
+        sheet_str = z.read(sheet_zip_path).decode("utf-8")
+
+    existing_row_full = re.compile(rf'<row[^>]*\br="{row_idx}"[^>]*>.*?</row>', re.S)
+    existing_row_self = re.compile(rf'<row[^>]*\br="{row_idx}"[^>]*/>', re.S)
+
+    if existing_row_full.search(sheet_str):
+        sheet_str = existing_row_full.sub(f'<row r="{row_idx}"/>', sheet_str, count=1)
+    elif existing_row_self.search(sheet_str):
+        # Already empty; treat as a no-op success.
+        return True
+    else:
+        return False
+
+    tmp_path = file_path.with_suffix(".xlsx.tmp")
+    try:
+        with zipfile.ZipFile(file_path, "r") as z_in, \
+             zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as z_out:
+            for item in z_in.infolist():
+                data = sheet_str.encode("utf-8") if item.filename == sheet_zip_path \
+                    else z_in.read(item.filename)
+                z_out.writestr(item, data)
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                tmp_path.replace(file_path)
+                break
+            except (OSError, PermissionError):
+                if attempt < max_retries - 1:
+                    time.sleep(0.1)
+                else:
+                    raise
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    return True
+
+
 # Column O (1-based = 15, 0-based = 14) is the ItemCode column in CREXPD01,
 # as confirmed by the formula: MATCH(B{row}, CREXPD01!$O$1:$O$15000, 0)
 _CREXPD01_ITEMCODE_COL_FALLBACK = 14  # 0-based index
@@ -433,6 +480,22 @@ def load_sheet():
         if any(v not in (None, "") for v in row_dict.values()):
             saw_data = True
             consecutive_empty = 0
+
+            # Ignore header/template rows accidentally present in data region.
+            file_number_raw = str(row_dict.get("File Number") or "").strip().upper()
+            if not FILE_NUMBER_PATTERN.match(file_number_raw):
+                continue
+
+            # Skip placeholder rows that only reserve a File Number but have
+            # no real data in the remaining columns.
+            has_payload = any(
+                str(row_dict.get(col_name) or "").strip()
+                for col_name in headers
+                if col_name != "File Number"
+            )
+            if not has_payload:
+                continue
+
             if row_dict.get("ItemCode") and desc_index:
                 ic = str(row_dict["ItemCode"]).strip().upper()
                 looked_up = desc_index.get(ic, "")
@@ -687,6 +750,53 @@ def update_file_link(file_number: str, file_link: str) -> bool:
         return updated
     finally:
         wb.close()
+
+
+def delete_row_by_file_number(file_number: str) -> bool:
+    """Delete one row from Heat Number sheet identified by File Number.
+
+    Returns True if a row was deleted, False if no match was found.
+    """
+    if not file_number:
+        return False
+
+    file_path = Path(cfg.EXCEL_FILE)
+    if not file_path.exists():
+        raise FileNotFoundError(f"Workbook not found: {cfg.EXCEL_FILE}")
+
+    column_names = [col["name"] for col in COLUMNS]
+    try:
+        file_number_idx = column_names.index("File Number")
+    except ValueError as exc:
+        raise ValueError("Required column 'File Number' is missing in app schema.") from exc
+
+    target = str(file_number).strip().upper()
+    target_row_idx = None
+
+    wb = load_workbook(file_path, read_only=True, data_only=True, keep_vba=file_path.suffix.lower() == ".xlsm")
+    try:
+        ws_form = _get_form_sheet_for_read(wb)
+        if ws_form is None:
+            return False
+
+        for row_idx, row_vals in enumerate(
+            ws_form.iter_rows(min_row=APP_DATA_START_ROW, max_row=ws_form.max_row, values_only=True),
+            start=APP_DATA_START_ROW,
+        ):
+            current_value = row_vals[file_number_idx] if row_vals and file_number_idx < len(row_vals) else None
+            if str(current_value or "").strip().upper() == target:
+                target_row_idx = row_idx
+                break
+    finally:
+        wb.close()
+
+    if target_row_idx is None:
+        return False
+
+    updated = _zip_clear_row(file_path, target_row_idx)
+    if updated:
+        _invalidate_form_rows_cache()
+    return updated
 
 
 def search_rows(search_value, search_column="ItemCode"):
