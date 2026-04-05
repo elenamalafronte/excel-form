@@ -956,6 +956,10 @@ def build_insert_tab(tab):
         # Ensure immediate ItemCode autofill uses fresh workbook rows.
         _invalidate_sheet_rows_cache()
 
+        # Give the workbook file time to be fully written and released by the OS
+        # before the search tab tries to read it. Prevents file locking issues.
+        time.sleep(0.2)
+
         _show_timed_success(
             file_number,
             elapsed_seconds,

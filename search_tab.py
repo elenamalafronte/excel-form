@@ -1,4 +1,5 @@
 import os
+import threading
 from tkinter import BooleanVar, Menu, filedialog, messagebox
 from tkinter import font as tkfont
 
@@ -33,6 +34,37 @@ from ui_style import (
     TABLE_FONT_SIZE,
     TABLE_HEADING_FONT_SIZE
 )
+
+
+_BUTTON_IDLE_FG = ("#3B8ED0", "#1F6AA5")
+_BUTTON_IDLE_HOVER = ("#36719F", "#144870")
+_BUTTON_BUSY_FG = "#1F4D82"
+_ROW_SELECTED_BG = "#DCEBFF"
+_ROW_SELECTED_FG = "#0D1B2A"
+_CELL_SELECTED_BG = "#6E9FEA"
+_CELL_SELECTED_FG = "#FFFFFF"
+
+
+def _set_button_loading_state(button, is_loading, idle_text, busy_text, refresh_widget=None):
+    if button is None:
+        return
+
+    if is_loading:
+        button.configure(
+            state="normal",
+            text=busy_text,
+            fg_color=_BUTTON_BUSY_FG,
+            hover_color=_BUTTON_BUSY_FG,
+        )
+        if refresh_widget is not None:
+            refresh_widget.update_idletasks()
+    else:
+        button.configure(
+            state="normal",
+            text=idle_text,
+            fg_color=_BUTTON_IDLE_FG,
+            hover_color=_BUTTON_IDLE_HOVER,
+        )
 
 
 def build_search_tab(tab):
@@ -512,9 +544,43 @@ def build_search_tab(tab):
         else:
             selected_actions.grid_remove()
 
+    def _highlight_selected_row_and_cell():
+        row_index = get_selected_row_index()
+        selected = results_sheet.get_currently_selected()
+        col_index = None
+        if selected and len(selected) >= 2 and isinstance(selected[1], int):
+            col_index = selected[1]
+
+        try:
+            results_sheet.dehighlight_rows("all", redraw=False)
+            results_sheet.dehighlight_cells(all_=True, redraw=False)
+
+            if row_index is not None:
+                results_sheet.highlight_rows(
+                    row_index,
+                    bg=_ROW_SELECTED_BG,
+                    fg=_ROW_SELECTED_FG,
+                    redraw=False,
+                )
+                if isinstance(col_index, int) and col_index >= 0:
+                    results_sheet.highlight_cells(
+                        row=row_index,
+                        column=col_index,
+                        bg=_CELL_SELECTED_BG,
+                        fg=_CELL_SELECTED_FG,
+                        redraw=False,
+                    )
+
+            results_sheet.redraw()
+        except Exception:
+            # Keep selection behavior usable even if highlight styling fails.
+            pass
+
     def _update_selected_actions_ui():
         if selected_info_label is None or upload_pdf_button is None:
             return
+
+        _highlight_selected_row_and_cell()
 
         values = _selected_row_values()
         if not values:
@@ -650,11 +716,40 @@ def build_search_tab(tab):
 
         original_text = upload_pdf_button.cget("text") if upload_pdf_button is not None else "Upload PDF"
         if upload_pdf_button is not None:
-            upload_pdf_button.configure(state="disabled", text="Uploading PDF...")
-            container.update_idletasks()
+            _set_button_loading_state(
+                upload_pdf_button,
+                True,
+                idle_text=original_text,
+                busy_text="Uploading....",
+                refresh_widget=container,
+            )
 
-        try:
-            updated = update_file_link(file_number, file_path)
+        def do_upload():
+            """Background thread worker for PDF upload."""
+            error_msg = None
+            updated = False
+            try:
+                updated = update_file_link(file_number, file_path)
+            except Exception as exc:
+                error_msg = f"Could not save PDF link:\n{exc}"
+            finally:
+                # Re-enable button on main thread
+                container.after(0, _finish_upload, error_msg, updated)
+
+        def _finish_upload(error_msg, updated):
+            """Finish upload and update UI on main thread."""
+            if upload_pdf_button is not None:
+                _set_button_loading_state(
+                    upload_pdf_button,
+                    False,
+                    idle_text=original_text,
+                    busy_text="Uploading....",
+                )
+
+            if error_msg:
+                messagebox.showerror("Upload PDF", error_msg)
+                return
+
             if not updated:
                 messagebox.showwarning("Upload PDF", "Could not find the selected row in workbook.")
                 return
@@ -666,11 +761,10 @@ def build_search_tab(tab):
                     results_sheet.select_row(idx, redraw=True, run_binding_func=False)
                     break
             _update_selected_actions_ui()
-        except Exception as exc:
-            messagebox.showerror("Upload PDF", f"Could not save PDF link:\n{exc}")
-        finally:
-            if upload_pdf_button is not None:
-                upload_pdf_button.configure(state="normal", text=original_text)
+
+        # Start background upload thread
+        upload_thread = threading.Thread(target=do_upload, daemon=True)
+        upload_thread.start()
 
     tab.refresh_search = on_search
     tab.refresh_search_with_recalc = refresh_after_recalc

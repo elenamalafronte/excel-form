@@ -2,6 +2,7 @@ import os
 import subprocess
 import zipfile
 import re
+import time
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -217,7 +218,18 @@ def _zip_append_row(file_path, row_values, new_row_idx, cached_values=None):
                 data = sheet_str.encode("utf-8") if item.filename == sheet_zip_path \
                     else z_in.read(item.filename)
                 z_out.writestr(item, data)
-        tmp_path.replace(file_path)
+        
+        # Handle Windows file locking by retrying replace if it fails
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                tmp_path.replace(file_path)
+                break
+            except (OSError, PermissionError) as e:
+                if attempt < max_retries - 1:
+                    time.sleep(0.1)  # Brief delay before retry
+                else:
+                    raise
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise
@@ -613,21 +625,19 @@ def update_file_link(file_number: str, file_link: str) -> bool:
     try:
         _, ws_form = _get_layout_sheets(wb)
 
-        headers = []
-        for col_idx in range(1, ws_form.max_column + 1):
-            value = ws_form.cell(row=1, column=col_idx).value
-            headers.append(str(value).strip() if value is not None else "")
-
+        # Use app schema instead of worksheet row headers. The workbook can
+        # contain templates/merged headers, but COLUMNS is the source of truth.
+        column_names = [col["name"] for col in COLUMNS]
         try:
-            file_number_idx = headers.index("File Number") + 1
-            file_link_idx = headers.index("FileLink") + 1
-        except ValueError:
-            return False
+            file_number_idx = column_names.index("File Number") + 1
+            file_link_idx = column_names.index("FileLink") + 1
+        except ValueError as exc:
+            raise ValueError("Required columns 'File Number' and/or 'FileLink' are missing in app schema.") from exc
 
         target = str(file_number).strip().upper()
         updated = False
 
-        for row_idx in range(2, ws_form.max_row + 1):
+        for row_idx in range(APP_DATA_START_ROW, ws_form.max_row + 1):
             current_value = ws_form.cell(row=row_idx, column=file_number_idx).value
             if str(current_value or "").strip().upper() != target:
                 continue
@@ -645,7 +655,6 @@ def update_file_link(file_number: str, file_link: str) -> bool:
 
         if updated:
             wb.save(file_path)
-            _invalidate_desc_index_cache()
         return updated
     finally:
         wb.close()

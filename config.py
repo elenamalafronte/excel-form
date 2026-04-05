@@ -2,6 +2,7 @@ import re
 import ast
 import pprint
 import sys
+import os
 from pathlib import Path
 
 
@@ -9,6 +10,22 @@ def _runtime_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def _user_config_dir() -> Path:
+    """Return user-writable config directory."""
+    if sys.platform == "win32":
+        base = Path(os.getenv("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")))
+    else:
+        base = Path.home() / ".config"
+    config_dir = base / "ExcelForm"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
+def _user_config_file() -> Path:
+    """Return path to user config file."""
+    return _user_config_dir() / "config.py"
 
 
 EXCEL_FILE = str((_runtime_dir() / 'Heat number summary.xlsm').resolve())
@@ -46,15 +63,21 @@ COLUMNS = [{'name': 'File Number',
 
 
 def save_columns_config(new_columns, config_file_path=None):
-    """Persist updated COLUMNS into config.py.
+    """Persist updated COLUMNS into user config directory.
 
-    This rewrites only the COLUMNS assignment block and keeps the rest of
-    config.py untouched.
+    Saves to user-writable AppData location instead of bundled config.py.
     """
-    target_path = Path(config_file_path) if config_file_path else Path(__file__)
-    source = target_path.read_text(encoding="utf-8")
+    target_path = Path(config_file_path) if config_file_path else _user_config_file()
+    
+    # Read existing user config if it exists, otherwise start fresh
+    if target_path.exists():
+        source = target_path.read_text(encoding="utf-8")
+        module = ast.parse(source)
+    else:
+        # Create new user config with just COLUMNS
+        source = ""
 
-    module = ast.parse(source)
+    module = ast.parse(source) if source else ast.parse("COLUMNS = []")
     columns_assign = None
     for node in module.body:
         if isinstance(node, ast.Assign):
@@ -65,22 +88,21 @@ def save_columns_config(new_columns, config_file_path=None):
         if columns_assign is not None:
             break
 
-    if columns_assign is None:
-        raise ValueError("Could not find COLUMNS assignment in config.py")
+    lines = source.splitlines(keepends=True) if source else []
+    if columns_assign is not None:
+        start_idx = columns_assign.lineno - 1
+        end_idx = columns_assign.end_lineno
+        updated_source = "".join(lines[:start_idx]) + f"COLUMNS = {pprint.pformat(new_columns, width=100, sort_dicts=False)}\n" + "".join(lines[end_idx:])
+    else:
+        # No existing COLUMNS assignment, append it
+        updated_source = f"COLUMNS = {pprint.pformat(new_columns, width=100, sort_dicts=False)}\n"
 
-    lines = source.splitlines(keepends=True)
-    start_idx = columns_assign.lineno - 1
-    end_idx = columns_assign.end_lineno
-
-    formatted_columns = pprint.pformat(new_columns, width=100, sort_dicts=False)
-    replacement = f"COLUMNS = {formatted_columns}\n"
-
-    updated_source = "".join(lines[:start_idx]) + replacement + "".join(lines[end_idx:])
     target_path.write_text(updated_source, encoding="utf-8")
 
 
 def _replace_constant_assignment(source, constant_name, new_value):
-    module = ast.parse(source)
+    """Replace or add a constant assignment in source code."""
+    module = ast.parse(source) if source else ast.parse("")
     target_node = None
 
     for node in module.body:
@@ -91,7 +113,8 @@ def _replace_constant_assignment(source, constant_name, new_value):
                 break
 
     if target_node is None:
-        raise ValueError(f"Could not find {constant_name} assignment in config.py")
+        # Constant not found, append it
+        return source + f"{constant_name} = {new_value!r}\n"
 
     lines = source.splitlines(keepends=True)
     start_idx = target_node.lineno - 1
@@ -102,13 +125,19 @@ def _replace_constant_assignment(source, constant_name, new_value):
 
 
 def save_workbook_settings(excel_file=None, source_sheet_name=None, form_sheet_name=None, config_file_path=None):
-    """Persist workbook path and sheet names into config.py.
+    """Persist workbook path and sheet names into user config directory.
 
+    Saves to user-writable AppData location instead of bundled config.py.
     Updates the module globals too so the running app can use the new values
     immediately without a restart.
     """
-    target_path = Path(config_file_path) if config_file_path else Path(__file__)
-    source = target_path.read_text(encoding="utf-8")
+    target_path = Path(config_file_path) if config_file_path else _user_config_file()
+    
+    # Read existing user config if it exists, otherwise start with empty
+    if target_path.exists():
+        source = target_path.read_text(encoding="utf-8")
+    else:
+        source = ""
 
     updates = {}
     if excel_file is not None:
@@ -124,6 +153,40 @@ def save_workbook_settings(excel_file=None, source_sheet_name=None, form_sheet_n
         globals()[constant_name] = value
 
     target_path.write_text(updated_source, encoding="utf-8")
+
+
+def load_user_config():
+    """Load user config overrides from AppData and apply to globals."""
+    user_config_path = _user_config_file()
+    if not user_config_path.exists():
+        return
+
+    try:
+        user_config_source = user_config_path.read_text(encoding="utf-8")
+        user_module = ast.parse(user_config_source)
+        
+        # Extract and apply overrides
+        for node in user_module.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        # Evaluate the value safely (only for simple literals)
+                        if isinstance(node.value, ast.Constant):
+                            globals()[target.id] = node.value.value
+                        elif isinstance(node.value, ast.List):
+                            # For COLUMNS, we need to eval carefully
+                            try:
+                                value = ast.literal_eval(node.value)
+                                globals()[target.id] = value
+                            except (ValueError, TypeError):
+                                pass
+    except Exception as e:
+        # If user config is malformed, just skip and use defaults
+        print(f"Warning: could not load user config from {user_config_path}: {e}", file=sys.stderr)
+
+
+# Load user config overrides if they exist
+load_user_config()
 
 SEARCH_BY = [col["name"] for col in COLUMNS]  # should be able to search by any column
 
