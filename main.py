@@ -47,19 +47,6 @@ def build_app():
 	build_insert_tab(tab_insert)
 	remount_search_tab()
 	tab_insert.rebuild_search = remount_search_tab
-
-	last_tab = {"name": None}
-
-	def watch_tab_selection():
-		current_tab = tabview.get()
-		if current_tab != last_tab["name"]:
-			last_tab["name"] = current_tab
-			if current_tab == "Search":
-				if hasattr(tab_search, "refresh_search"):
-					tab_search.refresh_search()
-		app.after(200, watch_tab_selection)
-
-	watch_tab_selection()
 	return app
 
 

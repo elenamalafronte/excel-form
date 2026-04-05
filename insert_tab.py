@@ -777,11 +777,6 @@ def build_insert_tab(tab):
 
     next_file_number_state = {"value": None}
 
-    try:
-        next_file_number_state["value"] = get_next_fileNumber(load_sheet())
-    except Exception:
-        next_file_number_state["value"] = "01-01A"
-
     fields = {}
     item_code_widget = None
     description_widget = None
@@ -898,6 +893,14 @@ def build_insert_tab(tab):
         started_at = time.perf_counter()
         file_number = next_file_number_state["value"]
         if not file_number:
+            try:
+                file_number = get_next_fileNumber(load_sheet())
+                next_file_number_state["value"] = file_number
+            except Exception:
+                file_number = "01-01A"
+                next_file_number_state["value"] = file_number
+
+        if not file_number:
             _show_error("File Number", "Could not determine the next File Number")
             return
 
@@ -956,10 +959,6 @@ def build_insert_tab(tab):
         # Ensure immediate ItemCode autofill uses fresh workbook rows.
         _invalidate_sheet_rows_cache()
 
-        # Give the workbook file time to be fully written and released by the OS
-        # before the search tab tries to read it. Prevents file locking issues.
-        time.sleep(0.2)
-
         _show_timed_success(
             file_number,
             elapsed_seconds,
@@ -1004,3 +1003,4 @@ def build_insert_tab(tab):
         padx=ROW_PADX,
         pady=(12, 16),
     )
+

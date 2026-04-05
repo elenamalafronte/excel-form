@@ -43,6 +43,7 @@ _ROW_SELECTED_BG = "#DCEBFF"
 _ROW_SELECTED_FG = "#0D1B2A"
 _CELL_SELECTED_BG = "#6E9FEA"
 _CELL_SELECTED_FG = "#FFFFFF"
+_MAX_CUSTOM_HIGHLIGHT_ROWS = 1200
 
 
 def _set_button_loading_state(button, is_loading, idle_text, busy_text, refresh_widget=None):
@@ -133,6 +134,8 @@ def build_search_tab(tab):
     hidden_columns = set()
     column_visibility_vars = {}
     current_rows = []
+    search_request_id = {"value": 0}
+    search_in_progress = {"value": False}
     last_fitted_width = -1
     auto_fit_columns = True
     row_height_recalc_job = None
@@ -520,6 +523,7 @@ def build_search_tab(tab):
         header_menu.tk_popup(event.x_root, event.y_root)
 
     refresh_button = None
+    search_button = None
 
     file_number_col_idx = columns.index("File Number") if "File Number" in columns else -1
     file_link_col_idx = columns.index("FileLink") if "FileLink" in columns else -1
@@ -545,6 +549,11 @@ def build_search_tab(tab):
             selected_actions.grid_remove()
 
     def _highlight_selected_row_and_cell():
+        # Full dehighlight/highlight on every click is expensive on very large
+        # tables and can lock the UI. Fall back to native tksheet selection.
+        if len(current_rows) > _MAX_CUSTOM_HIGHLIGHT_ROWS:
+            return
+
         row_index = get_selected_row_index()
         selected = results_sheet.get_currently_selected()
         col_index = None
@@ -659,6 +668,30 @@ def build_search_tab(tab):
         results_sheet.redraw()
         _update_selected_actions_ui()
 
+    def _set_search_loading(is_loading):
+        search_in_progress["value"] = is_loading
+
+        try:
+            search_entry.configure(state="disabled" if is_loading else "normal")
+            search_by.configure(state="disabled" if is_loading else "normal")
+        except Exception:
+            pass
+
+        if refresh_button is not None:
+            refresh_button.configure(
+                state="disabled" if is_loading else "normal",
+                text="Refreshing..." if is_loading else "Refresh",
+            )
+
+        if search_button is not None:
+            _set_button_loading_state(
+                search_button,
+                is_loading,
+                idle_text="Search",
+                busy_text="Loading...",
+                refresh_widget=container if is_loading else None,
+            )
+
     def sort_by_column(col_name):
         if col_name not in columns:
             return
@@ -674,23 +707,49 @@ def build_search_tab(tab):
 
     def on_search():
         nonlocal current_rows
-        rows = search_rows(search_entry.get().strip(), search_by.get())
-        current_rows = list(rows)
-        _apply_sort_state()
-        _render_rows()
+        if search_in_progress["value"]:
+            return
+
+        search_value = search_entry.get().strip()
+        search_column = search_by.get()
+        search_request_id["value"] += 1
+        request_id = search_request_id["value"]
+        _set_search_loading(True)
+
+        def _do_search():
+            error_msg = None
+            rows = []
+            try:
+                rows = search_rows(search_value, search_column)
+            except Exception as exc:
+                error_msg = str(exc)
+            finally:
+                tab.after(0, _finish_search, request_id, rows, error_msg)
+
+        def _finish_search(request_id_from_thread, rows, error_msg):
+            nonlocal current_rows
+            # Ignore stale responses from older requests.
+            if request_id_from_thread != search_request_id["value"]:
+                return
+
+            _set_search_loading(False)
+
+            if error_msg:
+                messagebox.showerror("Search", f"Could not load rows:\n{error_msg}")
+                return
+
+            current_rows = list(rows)
+            _apply_sort_state()
+            _render_rows()
+
+        threading.Thread(target=_do_search, daemon=True).start()
 
     def refresh_with_feedback():
         if refresh_button is None:
             on_search()
             return
 
-        original_text = refresh_button.cget("text")
-        refresh_button.configure(state="disabled", text="Refreshing...")
-        container.update_idletasks()
-        try:
-            on_search()
-        finally:
-            refresh_button.configure(state="normal", text=original_text)
+        on_search()
 
     def refresh_after_recalc():
         on_search()
@@ -868,8 +927,6 @@ def build_search_tab(tab):
 
     results_sheet.bind("<Configure>", on_sheet_configure, add="+")
 
-    on_search()
-
     column_visibility_text = "Column Visibility"
     column_visibility_button_width = body_font.measure(column_visibility_text) + 26
 
@@ -893,7 +950,7 @@ def build_search_tab(tab):
     top_actions = CTkFrame(container, fg_color="transparent")
     top_actions.grid(row=1, column=4, sticky="e", padx=ROW_PADX, pady=ROW_PADY)
 
-    CTkButton(
+    search_button = CTkButton(
         top_actions,
         text="Search",
         command=on_search,
@@ -901,7 +958,8 @@ def build_search_tab(tab):
         corner_radius=BUTTON_CORNER_RADIUS,
         font=body_font,
         width=110,
-    ).pack(side="left")
+    )
+    search_button.pack(side="left")
     refresh_button = CTkButton(
         container,
         text="Refresh",
