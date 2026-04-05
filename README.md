@@ -102,6 +102,34 @@ Skip signature verification:
 .\release.ps1 -CertThumbprint "YOUR_CERT_SHA1_THUMBPRINT" -SkipVerify
 ```
 
+## macOS Release
+
+Windows `.exe` files do not run on macOS.
+For macOS clients, build and send a macOS app bundle zip.
+
+### Local macOS build
+
+Run this on a Mac:
+
+```bash
+chmod +x ./release-macos.sh
+./release-macos.sh
+```
+
+Output file to send:
+
+- `insta ller-output/ExcelForm-macOS.zip`
+
+### GitHub Actions build
+
+Workflow file:
+
+- `.github/workflows/release-macos.yml`
+
+It runs on `macos-latest` and uploads this artifact:
+
+- `ExcelForm-macOS` (contains `installer-output/ExcelForm-macOS.zip`)
+
 ## Workbook Behavior
 
 - Workbook path and sheet settings are managed in Workbook Settings from the app.
