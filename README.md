@@ -68,6 +68,105 @@ From the project folder:
 python main.py
 ```
 
+## Windows Release (Important)
+
+Do not send only `ExcelForm.exe` to clients.
+
+This project is currently packaged in **one-folder mode** (PyInstaller + `_internal` runtime files). If only the EXE is sent, Windows will show errors like:
+
+- `failed to load python dll`
+- `LoadLibrary: impossible to find the specified module`
+
+Always ship the installer generated from `ExcelForm.iss`.
+
+### Build the app
+
+From the project folder:
+
+```powershell
+pyinstaller .\ExcelForm.spec --clean
+```
+
+Expected output:
+
+- `dist\ExcelForm\ExcelForm.exe`
+- `dist\ExcelForm\_internal\python313.dll` (and other runtime files)
+
+### Build the installer
+
+Compile `ExcelForm.iss` with Inno Setup Compiler (`ISCC`).
+
+Example:
+
+```powershell
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" .\ExcelForm.iss
+```
+
+Expected output:
+
+- `installer-output\ExcelFormSetup.exe`
+
+### Sign binaries with a trusted certificate
+
+Sign both the app EXE and installer EXE.
+
+```powershell
+$thumb = "YOUR_CERT_SHA1_THUMBPRINT"
+$ts = "http://timestamp.digicert.com"
+
+signtool sign /sha1 $thumb /fd SHA256 /tr $ts /td SHA256 .\dist\ExcelForm\ExcelForm.exe
+signtool sign /sha1 $thumb /fd SHA256 /tr $ts /td SHA256 .\installer-output\ExcelFormSetup.exe
+
+signtool verify /pa /v .\dist\ExcelForm\ExcelForm.exe
+signtool verify /pa /v .\installer-output\ExcelFormSetup.exe
+```
+
+### What to send to clients
+
+Send only:
+
+- `installer-output\ExcelFormSetup.exe` (signed)
+
+Do not send:
+
+- `dist\ExcelForm\ExcelForm.exe` by itself
+
+### One-click release script
+
+Use `release.ps1` to run the full workflow (build app, build installer, sign, verify, print hash).
+
+Signed release:
+
+```powershell
+.\release.ps1 -CertThumbprint "YOUR_CERT_SHA1_THUMBPRINT"
+```
+
+Unsigned test release (for internal testing only):
+
+```powershell
+.\release.ps1 -SkipSign
+```
+
+Skip signature verification (not recommended for production):
+
+```powershell
+.\release.ps1 -CertThumbprint "YOUR_CERT_SHA1_THUMBPRINT" -SkipVerify
+```
+
+### What to send to client IT (managed laptops)
+
+If endpoint protection still blocks installation, send IT:
+
+1. signed installer file name: `ExcelFormSetup.exe`
+2. publisher name from your code-signing certificate
+3. SHA256 hash:
+
+```powershell
+Get-FileHash .\installer-output\ExcelFormSetup.exe -Algorithm SHA256
+```
+
+Ask IT to allow by publisher certificate rule (preferred) or by hash rule.
+
 ## Workbook Notes
 
 The app expects an Excel workbook with:

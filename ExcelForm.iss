@@ -12,7 +12,7 @@ AppId=ExcelFormApp
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-DefaultDirName={autopf}\{#AppDirName}
+DefaultDirName={localappdata}\Programs\{#AppDirName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=installer-output
@@ -20,8 +20,11 @@ OutputBaseFilename=ExcelFormSetup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+; Optional: enable automatic signing during installer compile after cert setup.
+; SignTool=signtool sign /sha1 "$q$env:CERT_SHA1$q" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $f
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
