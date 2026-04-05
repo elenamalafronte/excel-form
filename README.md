@@ -102,11 +102,34 @@ Skip signature verification:
 .\release.ps1 -CertThumbprint "YOUR_CERT_SHA1_THUMBPRINT" -SkipVerify
 ```
 
-## Workbook Behavior
+### What to send to client IT (managed laptops)
 
-- Workbook path and sheet settings are managed in Workbook Settings from the app.
-- App-managed records are written starting at row 3 in the output sheet.
-- Search reads from the app-managed region starting at row 3.
+If endpoint protection still blocks installation, send IT:
+
+1. signed installer file name: `ExcelFormSetup.exe`
+2. publisher name from your code-signing certificate
+3. SHA256 hash:
+
+```powershell
+Get-FileHash .\installer-output\ExcelFormSetup.exe -Algorithm SHA256
+```
+
+Ask IT to allow by publisher certificate rule (preferred) or by hash rule.
+
+## Workbook Notes
+
+The app expects an Excel workbook with:
+- source sheet: `CREXPD01`
+- form/output sheet: `Heat Number`
+
+The app uses `EXCEL_FILE` in `config.py` to decide which file to read/write.
+
+On a first run, no workbook is loaded by default. After you choose a workbook in Workbook Settings, that selection is saved in the user config and reused the next time the app starts.
+
+Data placement behavior:
+- App-managed records are written starting from row 3 in the form/output sheet.
+- Search reads from the app-managed table region that starts at row 3.
+- This avoids mixing app rows with deep template/history ranges in large client workbooks.
 
 ## Troubleshooting
 

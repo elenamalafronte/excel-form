@@ -28,9 +28,18 @@ def _user_config_file() -> Path:
     return _user_config_dir() / "config.py"
 
 
-EXCEL_FILE = str((_runtime_dir() / 'Heat number summary.xlsm').resolve())
+EXCEL_FILE = ""
+USER_HAS_SELECTED_WORKBOOK = False
 SOURCE_SHEET_NAME = 'CREXPD01'
 FORM_SHEET_NAME = 'Heat Number'
+
+
+def get_excel_file_path() -> Path | None:
+    """Return the configured workbook path, or None when no workbook is loaded."""
+    value = str(EXCEL_FILE).strip()
+    if not value:
+        return None
+    return Path(value).expanduser()
 
 # Workbook layout:
 # 1) first sheet = raw data, read-only
@@ -142,6 +151,7 @@ def save_workbook_settings(excel_file=None, source_sheet_name=None, form_sheet_n
     updates = {}
     if excel_file is not None:
         updates["EXCEL_FILE"] = str(excel_file)
+        updates["USER_HAS_SELECTED_WORKBOOK"] = True
     if source_sheet_name is not None:
         updates["SOURCE_SHEET_NAME"] = str(source_sheet_name)
     if form_sheet_name is not None:
@@ -164,12 +174,23 @@ def load_user_config():
     try:
         user_config_source = user_config_path.read_text(encoding="utf-8")
         user_module = ast.parse(user_config_source)
+
+        user_has_selected_workbook = False
+        for node in user_module.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "USER_HAS_SELECTED_WORKBOOK":
+                        if isinstance(node.value, ast.Constant):
+                            user_has_selected_workbook = bool(node.value.value)
+                        break
         
         # Extract and apply overrides
         for node in user_module.body:
             if isinstance(node, ast.Assign):
                 for target in node.targets:
                     if isinstance(target, ast.Name):
+                        if target.id == "EXCEL_FILE" and not user_has_selected_workbook:
+                            continue
                         # Evaluate the value safely (only for simple literals)
                         if isinstance(node.value, ast.Constant):
                             globals()[target.id] = node.value.value

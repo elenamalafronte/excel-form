@@ -22,8 +22,8 @@ EMPTY_ROW_STOP_THRESHOLD = 25
 
 
 def _open_workbook():
-    path = Path(cfg.EXCEL_FILE)
-    if path.exists():
+    path = cfg.get_excel_file_path()
+    if path is not None and path.exists():
         return load_workbook(path, keep_vba=path.suffix.lower() == ".xlsm")
     return Workbook()
 
@@ -412,8 +412,8 @@ def _get_desc_index(path: Path) -> dict:
 
 def get_description_for_itemcode(item_code: str) -> str:
     """Return description for an ItemCode from CREXPD01 index, if available."""
-    path = Path(cfg.EXCEL_FILE)
-    if not path.exists() or not item_code:
+    path = cfg.get_excel_file_path()
+    if path is None or not path.exists() or not item_code:
         return ""
 
     desc_index = _get_desc_index(path)
@@ -431,8 +431,8 @@ def load_sheet():
     Excel has recalculated and cached the formula result. The index is built
     once and cached by file mtime, so repeated searches are instant.
     """
-    path = Path(cfg.EXCEL_FILE)
-    if not path.exists():
+    path = cfg.get_excel_file_path()
+    if path is None or not path.exists():
         return []
 
     global _form_rows_cache, _form_rows_cache_file_sig
@@ -540,8 +540,8 @@ def _excel_recalc_and_save(file_path: Path) -> None:
 
 def recalc_workbook() -> None:
     """Force Excel recalculation/save for the configured workbook."""
-    file_path = Path(cfg.EXCEL_FILE)
-    if not file_path.exists():
+    file_path = cfg.get_excel_file_path()
+    if file_path is None or not file_path.exists():
         return
     _excel_recalc_and_save(file_path)
     _invalidate_desc_index_cache()
@@ -555,9 +555,9 @@ def append_row(data: dict):
     Phase 2 — rewrite only the Heat Number worksheet XML inside the ZIP,
                leaving CREXPD01 untouched (never parsed, never serialized).
     """
-    file_path = Path(cfg.EXCEL_FILE)
-    if not file_path.exists():
-        raise FileNotFoundError(f"Workbook not found: {cfg.EXCEL_FILE}")
+    file_path = cfg.get_excel_file_path()
+    if file_path is None or not file_path.exists():
+        raise FileNotFoundError("No workbook is loaded. Use Workbook Settings to choose a workbook.")
     try:
         headers = [col["name"] for col in COLUMNS]
 
@@ -612,7 +612,7 @@ def append_row(data: dict):
         _zip_append_row(file_path, row_values, new_row_idx, cached_values=cached_values)
     except PermissionError as exc:
         raise PermissionError(
-            f"Cannot save workbook. Close '{cfg.EXCEL_FILE}' in Excel and try again."
+            f"Cannot save workbook. Close '{file_path}' in Excel and try again."
         ) from exc
 
     _invalidate_form_rows_cache()
@@ -628,7 +628,9 @@ def sync_form_sheet_columns(old_columns, new_columns):
     Columns removed from config are removed from the sheet.
     Newly added columns are created with blank values for existing rows.
     """
-    file_path = Path(cfg.EXCEL_FILE)
+    file_path = cfg.get_excel_file_path()
+    if file_path is None or not file_path.exists():
+        raise FileNotFoundError("No workbook is loaded. Use Workbook Settings to choose a workbook.")
 
     wb = _open_workbook()
     _, ws_form = _get_layout_sheets(wb)
@@ -708,9 +710,9 @@ def update_file_link(file_number: str, file_link: str) -> bool:
     if not file_number:
         return False
 
-    file_path = Path(cfg.EXCEL_FILE)
-    if not file_path.exists():
-        raise FileNotFoundError(f"Workbook not found: {cfg.EXCEL_FILE}")
+    file_path = cfg.get_excel_file_path()
+    if file_path is None or not file_path.exists():
+        raise FileNotFoundError("No workbook is loaded. Use Workbook Settings to choose a workbook.")
 
     wb = _open_workbook()
     try:
@@ -760,9 +762,9 @@ def delete_row_by_file_number(file_number: str) -> bool:
     if not file_number:
         return False
 
-    file_path = Path(cfg.EXCEL_FILE)
-    if not file_path.exists():
-        raise FileNotFoundError(f"Workbook not found: {cfg.EXCEL_FILE}")
+    file_path = cfg.get_excel_file_path()
+    if file_path is None or not file_path.exists():
+        raise FileNotFoundError("No workbook is loaded. Use Workbook Settings to choose a workbook.")
 
     column_names = [col["name"] for col in COLUMNS]
     try:

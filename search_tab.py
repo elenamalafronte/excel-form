@@ -1003,8 +1003,12 @@ def build_search_tab(tab):
     tab.auto_refresh_search = lambda: on_search()
 
     def open_workbook():
+        workbook_path = cfg.get_excel_file_path()
+        if workbook_path is None or not workbook_path.exists():
+            messagebox.showinfo("Open Workbook", "No workbook is loaded yet. Use Workbook Settings in the Insert tab to choose one.")
+            return
         try:
-            os.startfile(cfg.EXCEL_FILE)
+            os.startfile(workbook_path)
         except Exception as exc:
             messagebox.showerror("Open Workbook", f"Could not open workbook:\n{exc}")
 

@@ -134,8 +134,8 @@ def _get_cached_sheet_rows():
     """
     global _sheet_rows_cache, _sheet_rows_cache_file_sig
 
-    workbook_path = Path(cfg.EXCEL_FILE)
-    if not workbook_path.exists():
+    workbook_path = cfg.get_excel_file_path()
+    if workbook_path is None or not workbook_path.exists():
         _sheet_rows_cache = []
         _sheet_rows_cache_file_sig = None
         return _sheet_rows_cache
@@ -238,7 +238,9 @@ def _bind_itemcode_autofill(item_code_widget, description_widget):
 
 
 def _validate_workbook_settings(excel_file, source_sheet_name, form_sheet_name):
-    workbook_path = Path(excel_file).expanduser()
+    workbook_path = Path(excel_file).expanduser() if excel_file else None
+    if workbook_path is None:
+        return False, "Workbook file is required."
     if not workbook_path.exists():
         return False, f"Workbook not found: {workbook_path}"
 
@@ -288,7 +290,7 @@ def build_insert_tab(tab):
         form.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         form.grid_columnconfigure(1, weight=1)
 
-        workbook_var = StringVar(value=cfg.EXCEL_FILE)
+        workbook_var = StringVar(value=cfg.EXCEL_FILE if cfg.EXCEL_FILE else "")
         source_sheet_var = StringVar(value=cfg.SOURCE_SHEET_NAME)
         form_sheet_var = StringVar(value=cfg.FORM_SHEET_NAME)
 
@@ -305,9 +307,6 @@ def build_insert_tab(tab):
             source_sheet_name = source_sheet_var.get().strip()
             form_sheet_name = form_sheet_var.get().strip()
 
-            if not workbook_path:
-                messagebox.showerror("Workbook Settings", "Workbook file is required.")
-                return
             if not source_sheet_name:
                 messagebox.showerror("Workbook Settings", "Source sheet name is required.")
                 return
