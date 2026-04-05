@@ -28,13 +28,21 @@ python -m pip install pyinstaller customtkinter openpyxl
 mkdir -p installer-output
 
 echo "Building macOS app bundle..."
-pyinstaller \
-  --noconfirm \
-  --clean \
-  --windowed \
-  --name "$APP_NAME" \
-  --add-data "Heat number summary.xlsm:." \
-  main.py
+PYINSTALLER_ARGS=(
+  --noconfirm
+  --clean
+  --windowed
+  --name "$APP_NAME"
+)
+
+if [ -f "Heat number summary.xlsm" ]; then
+  PYINSTALLER_ARGS+=(--add-data "Heat number summary.xlsm:.")
+else
+  echo "Note: Heat number summary.xlsm not found in repo checkout; building without bundled sample workbook."
+fi
+
+PYINSTALLER_ARGS+=(main.py)
+pyinstaller "${PYINSTALLER_ARGS[@]}"
 
 APP_BUNDLE_PATH="dist/${APP_NAME}.app"
 if [ ! -d "$APP_BUNDLE_PATH" ]; then
